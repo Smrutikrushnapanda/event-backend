@@ -9,17 +9,10 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // ✅ Allow multiple origins: Web + Mobile
-  app.enableCors({
-    origin: [
-      'http://localhost:3000',           // Next.js web frontend
-      'http://10.19.144.5:3000',        // Web from network
-      'http://10.0.2.2:5000',           // Android emulator
-      'http://localhost:8081',          // React Native Metro bundler
-    ],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  });
+ app.enableCors({
+  origin: '*',
+  credentials: true,
+});
 
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
     prefix: '/uploads/',
@@ -46,8 +39,8 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  // ✅ Listen on all network interfaces
-  await app.listen(5000, '0.0.0.0');
+const port = process.env.PORT || 5000;
+await app.listen(port);
 
   console.log('🚀 Application is running on:');
   console.log('   - Local:   http://localhost:5000');

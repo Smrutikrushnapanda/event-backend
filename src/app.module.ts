@@ -12,13 +12,15 @@ import { AuthModule } from './auth/auth.module';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
+      ssl: {
+        rejectUnauthorized: false,
+      },
       autoLoadEntities: true,
-      synchronize: true, // dev only
+      synchronize: true, // OK for now
     }),
     RegistrationsModule,
     VolunteersModule,
-    AuthModule
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],
