@@ -17,6 +17,7 @@ import { AuthModule } from './auth/auth.module';
       },
       autoLoadEntities: true,
       synchronize: true, // OK for now
+      logging: true,
     }),
     RegistrationsModule,
     VolunteersModule,

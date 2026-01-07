@@ -8,8 +8,13 @@ import {
   Query,
   UseInterceptors,
   UploadedFile,
+  NotFoundException,
+  BadRequestException,
+  Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { 
   ApiTags, 
   ApiOperation, 
@@ -21,16 +26,24 @@ import {
 } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
+import type { Response } from 'express';
 import { RegistrationsService } from './registrations.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { CheckInDto } from './dto/checkin.dto';
 import { AddDelegateDto } from './dto/add-delegate.dto';
+import { CheckIn } from './entities/checkin.entity';
+import { ExcelExportService } from './excel-export.service';
 
 @ApiTags('Registrations')
 @Controller('registrations')
 export class RegistrationsController {
 
-  constructor(private readonly registrationsService: RegistrationsService) {}
+  constructor(
+    private readonly registrationsService: RegistrationsService,
+    @InjectRepository(CheckIn)
+    private checkInRepository: Repository<CheckIn>,
+    private readonly excelExportService: ExcelExportService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create new registration with optional photo upload' })
@@ -72,7 +85,7 @@ export class RegistrationsController {
         callback(null, true);
       },
       limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB
+        fileSize: 50 * 1024 * 1024,
       },
     }),
   )
@@ -94,7 +107,6 @@ export class RegistrationsController {
     return this.registrationsService.findAll();
   }
 
-  // ✅ NEW ENDPOINT: CHECK IF AADHAAR EXISTS
   @Post('check-aadhaar')
   @ApiOperation({ summary: 'Check if Aadhaar number is already registered' })
   @ApiBody({
@@ -109,26 +121,204 @@ export class RegistrationsController {
   @ApiResponse({ 
     status: 200, 
     description: 'Returns whether Aadhaar exists and QR code if found',
-    schema: {
-      type: 'object',
-      properties: {
-        exists: { type: 'boolean' },
-        qrCode: { type: 'string' },
-        name: { type: 'string' },
-      },
-    },
   })
   checkAadhaar(@Body('aadhaarOrId') aadhaarOrId: string) {
     return this.registrationsService.checkAadhaar(aadhaarOrId);
   }
 
+  // ✅ Get export statistics
+  @Get('export/stats')
+  @ApiOperation({ summary: 'Get statistics for export planning' })
+  @ApiResponse({ status: 200, description: 'Export statistics' })
+  async getExportStats() {
+    try {
+      const registrations = await this.registrationsService.findAllForExport();
+      
+      const blockCounts: Record<string, number> = {};
+      registrations.forEach(reg => {
+        blockCounts[reg.block] = (blockCounts[reg.block] || 0) + 1;
+      });
+
+      const estimatedExcelSize = registrations.length * 10;
+      const estimatedCSVSize = registrations.length * 0.2;
+
+      return {
+        totalRegistrations: registrations.length,
+        totalBlocks: Object.keys(blockCounts).length,
+        blockCounts,
+        estimatedExcelSizeMB: Math.round(estimatedExcelSize / 1024),
+        estimatedCSVSizeKB: Math.round(estimatedCSVSize),
+        estimatedExcelTimeMinutes: Math.round(registrations.length / 100),
+        recommendBlockWiseExport: registrations.length > 5000,
+      };
+    } catch (error) {
+      console.error('Error getting export stats:', error);
+      throw new BadRequestException('Failed to get export statistics');
+    }
+  }
+
+  // ✅ Export to CSV
+  @Get('export/csv')
+  @ApiOperation({ summary: 'Export all registrations to CSV (fast, no images)' })
+  @ApiResponse({ status: 200, description: 'CSV file generated successfully' })
+  async exportToCSV(@Res() res: Response) {
+    try {
+      const registrations = await this.registrationsService.findAllForExport();
+      
+      console.log(`📦 Exporting ${registrations.length} registrations to CSV...`);
+
+      const csv = await this.excelExportService.generateRegistrationsCSV(registrations);
+
+      const filename = `MPSO_Registrations_${new Date().toISOString().split('T')[0]}.csv`;
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', csv.length.toString());
+
+      res.send(csv);
+      console.log('✅ CSV export sent successfully');
+    } catch (error) {
+      console.error('❌ CSV export error:', error);
+      res.status(500).json({ error: 'Failed to generate CSV file' });
+    }
+  }
+
+  // ✅ Export all to Excel
+  @Get('export/excel')
+  @ApiOperation({ summary: 'Export all registrations to Excel with QR codes' })
+  @ApiResponse({ status: 200, description: 'Excel file generated successfully' })
+  async exportToExcel(@Res() res: Response) {
+    try {
+      const registrations = await this.registrationsService.findAllForExport();
+      
+      console.log(`📦 Exporting ${registrations.length} registrations to Excel...`);
+
+      const excelBuffer = await this.excelExportService.generateRegistrationsExcel(registrations);
+
+      const filename = `MPSO_Registrations_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', excelBuffer.length.toString());
+
+      res.send(excelBuffer);
+      console.log('✅ Excel export sent successfully');
+    } catch (error) {
+      console.error('❌ Export error:', error);
+      res.status(500).json({ error: 'Failed to generate Excel file' });
+    }
+  }
+
+  // ✅ Export block to Excel
+  @Get('export/excel/:blockName')
+  @ApiOperation({ summary: 'Export block registrations to Excel with QR codes' })
+  @ApiParam({ name: 'blockName', example: 'Bhubaneswar' })
+  @ApiResponse({ status: 200, description: 'Excel file generated successfully' })
+  async exportBlockToExcel(
+    @Param('blockName') blockName: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const registrations = await this.registrationsService.findByBlockForExport(blockName);
+
+      console.log(`📦 Exporting ${registrations.length} registrations for ${blockName} block...`);
+
+      const excelBuffer = await this.excelExportService.generateBlockExcel(registrations, blockName);
+
+      const filename = `${blockName}_Block_Registrations_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', excelBuffer.length.toString());
+
+      res.send(excelBuffer);
+      console.log('✅ Block excel export sent successfully');
+    } catch (error) {
+      console.error('❌ Block export error:', error);
+      res.status(500).json({ error: 'Failed to generate Excel file' });
+    }
+  }
+
+  // ✅ FIXED: Get by QR code
   @Get('qr/:qrCode')
-  @ApiOperation({ summary: 'Get registration by QR code' })
+  @ApiOperation({ summary: 'Get registration by QR code with check-in status' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
-  @ApiResponse({ status: 200, description: 'Returns registration details' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Returns registration details with check-in history',
+  })
   @ApiResponse({ status: 404, description: 'Registration not found' })
-  getByQr(@Param('qrCode') qrCode: string) {
-    return this.registrationsService.findByQrCode(qrCode);
+  async getByQr(@Param('qrCode') qrCode: string) {
+    try {
+      console.log('🔍 Controller: Looking up QR code:', qrCode);
+
+      const registration = await this.registrationsService.findByQrCode(qrCode);
+      
+      if (!registration) {
+        console.log('❌ Controller: Registration not found');
+        throw new NotFoundException({
+          statusCode: 404,
+          message: 'Registration not found',
+          error: 'Not Found',
+          qrCode: qrCode,
+        });
+      }
+
+      console.log('✅ Controller: Registration found:', registration.id, registration.name);
+
+      // Get check-ins separately
+      const checkIns = await this.checkInRepository.find({
+        where: { registration: { id: registration.id } },
+        order: { scannedAt: 'ASC' },
+      });
+
+      console.log('✅ Controller: Found', checkIns.length, 'check-ins');
+
+      const hasCheckedIn = {
+        entry: checkIns.some(c => c.type === 'entry'),
+        lunch: checkIns.some(c => c.type === 'lunch'),
+        dinner: checkIns.some(c => c.type === 'dinner'),
+        kit: checkIns.some(c => c.type === 'kit'),
+      };
+
+      return {
+        id: registration.id,
+        qrCode: registration.qrCode,
+        name: registration.name,
+        village: registration.village,
+        gp: registration.gp,
+        district: registration.district,
+        block: registration.block,
+        mobile: registration.mobile,
+        aadhaarOrId: registration.aadhaarOrId,
+        photoUrl: registration.photoUrl,
+        category: registration.category,
+        delegateName: registration.delegateName,
+        delegateMobile: registration.delegateMobile,
+        delegatePhotoUrl: registration.delegatePhotoUrl,
+        isDelegateAttending: registration.isDelegateAttending,
+        createdAt: registration.createdAt,
+        hasCheckedIn,
+        checkIns: checkIns.map(c => ({
+          id: c.id,
+          type: c.type,
+          scannedAt: c.scannedAt,
+          wasDelegate: c.wasDelegate,
+        })),
+      };
+    } catch (error) {
+      console.error('❌ Controller: Error in getByQr:', error);
+      
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'Failed to fetch registration',
+        error: error.message,
+      });
+    }
   }
 
   @Get(':id')
@@ -141,16 +331,112 @@ export class RegistrationsController {
   }
 
   @Post('checkin/:qrCode')
-  @ApiOperation({ summary: 'Check-in using QR code' })
+  @ApiOperation({ summary: 'Check-in for entry, lunch, or dinner' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        type: { 
+          type: 'string', 
+          enum: ['entry', 'lunch', 'dinner'],
+          example: 'entry',
+          description: 'Activity type: entry (check-in), lunch, or dinner'
+        },
+        scannedBy: { type: 'string', example: 'Volunteer', description: 'Optional: who scanned' },
+      },
+      required: ['type'],
+    },
+  })
   @ApiResponse({ status: 201, description: 'Check-in successful' })
-  @ApiResponse({ status: 400, description: 'Already checked in today' })
+  @ApiResponse({ status: 400, description: 'Already checked in for this activity' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
-  checkIn(
+  async checkIn(
     @Param('qrCode') qrCode: string,
-    @Body() dto: CheckInDto,
+    @Body() body: { type: string; scannedBy?: string },
   ) {
-    return this.registrationsService.checkIn(qrCode, dto);
+    const validTypes = ['entry', 'lunch', 'dinner'];
+    if (!validTypes.includes(body.type)) {
+      throw new BadRequestException('Invalid activity type');
+    }
+
+    const registration = await this.registrationsService.findByQrCode(qrCode);
+    
+    if (!registration) {
+      throw new NotFoundException('Registration not found');
+    }
+
+    const existingCheckIn = await this.checkInRepository.findOne({
+      where: {
+        registration: { id: registration.id },
+        type: body.type,
+      },
+    });
+
+    if (existingCheckIn) {
+      throw new BadRequestException(`${body.type} already marked`);
+    }
+
+    const checkIn = this.checkInRepository.create({
+      type: body.type,
+      registration,
+      wasDelegate: false,
+    });
+
+    await this.checkInRepository.save(checkIn);
+
+    return {
+      message: `${body.type} marked successfully`,
+      registration: {
+        id: registration.id,
+        name: registration.name,
+        qrCode: registration.qrCode,
+      },
+      checkedInAt: checkIn.scannedAt,
+    };
+  }
+
+  @Post('distribute-kit/:qrCode')
+  @ApiOperation({ summary: 'Distribute kit to participant' })
+  @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
+  @ApiResponse({ status: 201, description: 'Kit distributed successfully' })
+  @ApiResponse({ status: 400, description: 'Kit already distributed' })
+  @ApiResponse({ status: 404, description: 'Registration not found' })
+  async distributeKit(@Param('qrCode') qrCode: string) {
+    const registration = await this.registrationsService.findByQrCode(qrCode);
+    
+    if (!registration) {
+      throw new NotFoundException('Registration not found');
+    }
+
+    const existingKit = await this.checkInRepository.findOne({
+      where: {
+        registration: { id: registration.id },
+        type: 'kit',
+      },
+    });
+
+    if (existingKit) {
+      throw new BadRequestException('Kit already distributed');
+    }
+
+    const kitDistribution = this.checkInRepository.create({
+      type: 'kit',
+      registration,
+      wasDelegate: false,
+    });
+
+    await this.checkInRepository.save(kitDistribution);
+
+    return {
+      message: 'Kit distributed successfully',
+      registration: {
+        id: registration.id,
+        name: registration.name,
+        qrCode: registration.qrCode,
+      },
+      distributedAt: kitDistribution.scannedAt,
+    };
   }
 
   @Post(':id/delegate')
@@ -181,7 +467,7 @@ export class RegistrationsController {
         },
       }),
       limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB
+        fileSize: 50 * 1024 * 1024,
       },
     }),
   )

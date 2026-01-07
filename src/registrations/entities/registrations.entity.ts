@@ -33,7 +33,7 @@ export class Registration {
   @Column({ length: 10, unique: true })
   mobile: string;
 
-  @Column({ length: 12, unique: true }) // ✅ This is causing the issue
+  @Column({ unique: true })
   aadhaarOrId: string;
 
   @Column({ nullable: true })
@@ -54,7 +54,9 @@ export class Registration {
   @Column({ default: false })
   isDelegateAttending: boolean;
 
-  @OneToMany(() => CheckIn, (checkIn) => checkIn.registration)
+  @OneToMany(() => CheckIn, (checkIn) => checkIn.registration, {
+    cascade: true,
+  })
   checkIns: CheckIn[];
 
   @CreateDateColumn()

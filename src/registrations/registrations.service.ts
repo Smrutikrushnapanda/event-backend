@@ -1,74 +1,59 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Registration } from './entities/registrations.entity';
-import { CheckIn, CheckInType } from './entities/checkin.entity';
+import { CheckIn } from './entities/checkin.entity';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
-import { CheckInDto } from './dto/checkin.dto';
 import { AddDelegateDto } from './dto/add-delegate.dto';
-import { nanoid } from 'nanoid';
 
 @Injectable()
 export class RegistrationsService {
-
   constructor(
     @InjectRepository(Registration)
-    private registrationRepo: Repository<Registration>,
+    private registrationRepository: Repository<Registration>,
     @InjectRepository(CheckIn)
-    private checkInRepo: Repository<CheckIn>,
+    private checkInRepository: Repository<CheckIn>,
   ) {}
 
-  async create(data: CreateRegistrationDto) {
+  async create(dto: CreateRegistrationDto): Promise<Registration> {
     // Check if mobile already exists
-    const existingMobile = await this.registrationRepo.findOne({
-      where: { mobile: data.mobile },
+    const existingMobile = await this.registrationRepository.findOne({
+      where: { mobile: dto.mobile },
     });
 
     if (existingMobile) {
-      throw new ConflictException('This mobile number is already registered');
+      throw new ConflictException('Mobile number already registered');
     }
 
-    // ✅ CHECK IF AADHAAR ALREADY EXISTS
-    const existingAadhaar = await this.registrationRepo.findOne({
-      where: { aadhaarOrId: data.aadhaarOrId },
+    // Check if Aadhaar already exists
+    const existingAadhaar = await this.registrationRepository.findOne({
+      where: { aadhaarOrId: dto.aadhaarOrId },
     });
 
     if (existingAadhaar) {
-      throw new ConflictException('This Aadhaar number is already registered');
+      throw new ConflictException('Aadhaar/ID already registered');
     }
 
-    const qrCode = `EVENT-${nanoid(10)}`.toUpperCase();
-    
-    const record = this.registrationRepo.create({
-      ...data,
+    // Generate unique QR code
+    const qrCode = this.generateQRCode();
+
+    const registration = this.registrationRepository.create({
+      ...dto,
       qrCode,
     });
-    
-    return this.registrationRepo.save(record);
+
+    return this.registrationRepository.save(registration);
   }
 
-  findAll() {
-    return this.registrationRepo.find({ 
+  async findAll(): Promise<Registration[]> {
+    return this.registrationRepository.find({
+      relations: ['checkIns'],
       order: { createdAt: 'DESC' },
-      relations: ['checkIns'],
     });
   }
 
-  async findByQrCode(qrCode: string) {
-    const registration = await this.registrationRepo.findOne({
-      where: { qrCode },
-      relations: ['checkIns'],
-    });
-
-    if (!registration) {
-      throw new NotFoundException('Registration not found');
-    }
-
-    return registration;
-  }
-
-  async findById(id: string) {
-    const registration = await this.registrationRepo.findOne({
+  async findById(id: string): Promise<Registration> {
+    const registration = await this.registrationRepository.findOne({
       where: { id },
       relations: ['checkIns'],
     });
@@ -80,9 +65,30 @@ export class RegistrationsService {
     return registration;
   }
 
-  // ✅ NEW METHOD: CHECK IF AADHAAR EXISTS
+  async findByQrCode(qrCode: string): Promise<Registration | null> {
+    try {
+      console.log('🔍 Service: Looking up QR code:', qrCode);
+      
+      const registration = await this.registrationRepository.findOne({
+        where: { qrCode },
+        relations: ['checkIns'],
+      });
+
+      if (registration) {
+        console.log('✅ Service: Found registration:', registration.id);
+      } else {
+        console.log('❌ Service: No registration found');
+      }
+
+      return registration;
+    } catch (error) {
+      console.error('❌ Service: Error finding registration:', error);
+      throw error;
+    }
+  }
+
   async checkAadhaar(aadhaarOrId: string) {
-    const registration = await this.registrationRepo.findOne({
+    const registration = await this.registrationRepository.findOne({
       where: { aadhaarOrId },
     });
 
@@ -94,83 +100,81 @@ export class RegistrationsService {
       };
     }
 
-    return {
-      exists: false,
-    };
+    return { exists: false };
   }
 
-  async checkIn(qrCode: string, checkInData: CheckInDto) {
-    const registration = await this.findByQrCode(qrCode);
-
-    // Check if already checked in for this type today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const existingCheckIn = await this.checkInRepo.findOne({
-      where: {
-        registrationId: registration.id,
-        type: checkInData.type,
-      },
-      order: { scannedAt: 'DESC' },
-    });
-
-    if (existingCheckIn) {
-      const checkInDate = new Date(existingCheckIn.scannedAt);
-      checkInDate.setHours(0, 0, 0, 0);
-      
-      if (checkInDate.getTime() === today.getTime()) {
-        throw new BadRequestException(`Already checked in for ${checkInData.type} today`);
-      }
-    }
-
-    const checkIn = this.checkInRepo.create({
-      ...checkInData,
-      registrationId: registration.id,
-      wasDelegate: registration.isDelegateAttending,
-    });
-
-    await this.checkInRepo.save(checkIn);
-
-    return {
-      success: true,
-      registration,
-      checkIn,
-      message: `Check-in successful for ${checkInData.type}`,
-    };
-  }
-
-  async addDelegate(id: string, delegateData: AddDelegateDto) {
+  async addDelegate(id: string, dto: AddDelegateDto): Promise<Registration> {
     const registration = await this.findById(id);
 
-    registration.delegateName = delegateData.delegateName;
-    registration.delegateMobile = delegateData.delegateMobile;
-    registration.delegatePhotoUrl = delegateData.delegatePhotoUrl;
-    registration.isDelegateAttending = true;
+    registration.delegateName = dto.delegateName;
+    registration.delegateMobile = dto.delegateMobile;
+    registration.delegatePhotoUrl = dto.delegatePhotoUrl;
 
-    return this.registrationRepo.save(registration);
+    return this.registrationRepository.save(registration);
   }
 
-  async toggleDelegate(id: string, isDelegateAttending: boolean) {
+  async toggleDelegate(id: string, isDelegateAttending: boolean): Promise<Registration> {
     const registration = await this.findById(id);
 
-    if (!registration.delegateName && isDelegateAttending) {
-      throw new BadRequestException('No delegate registered');
+    if (!registration.delegateName) {
+      throw new BadRequestException('No delegate registered for this user');
     }
 
     registration.isDelegateAttending = isDelegateAttending;
-    return this.registrationRepo.save(registration);
+
+    return this.registrationRepository.save(registration);
   }
 
   async getCheckIns(id: string) {
     const registration = await this.findById(id);
-    return {
-      registration,
-      checkIns: registration.checkIns,
-      checkInSummary: {
-        entry: registration.checkIns.filter(c => c.type === CheckInType.ENTRY).length,
-        lunch: registration.checkIns.filter(c => c.type === CheckInType.LUNCH).length,
-        dinner: registration.checkIns.filter(c => c.type === CheckInType.DINNER).length,
-      },
+
+    const checkIns = await this.checkInRepository.find({
+      where: { registration: { id } },
+      order: { scannedAt: 'ASC' },
+    });
+
+    const summary = {
+      entry: checkIns.some(c => c.type === 'entry'),
+      lunch: checkIns.some(c => c.type === 'lunch'),
+      dinner: checkIns.some(c => c.type === 'dinner'),
+      kit: checkIns.some(c => c.type === 'kit'),
     };
+
+    return {
+      registration: {
+        id: registration.id,
+        name: registration.name,
+        qrCode: registration.qrCode,
+        isDelegateAttending: registration.isDelegateAttending,
+        delegateName: registration.delegateName,
+      },
+      checkIns,
+      summary,
+    };
+  }
+
+  // ✅ Export methods
+  async findAllForExport(): Promise<Registration[]> {
+    return this.registrationRepository.find({
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async findByBlockForExport(block: string): Promise<Registration[]> {
+    return this.registrationRepository.find({
+      where: { block },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  private generateQRCode(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = 'EVENT-';
+    
+    for (let i = 0; i < 11; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    
+    return code;
   }
 }

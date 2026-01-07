@@ -1,24 +1,11 @@
-import { IsEnum, IsOptional, IsBoolean, IsString } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CheckInType } from '../entities/checkin.entity';
+import { IsString, IsOptional, IsIn } from 'class-validator';
 
 export class CheckInDto {
-
-  @ApiProperty({ 
-    enum: CheckInType, 
-    example: CheckInType.ENTRY,
-    description: 'Type of check-in (ENTRY, LUNCH, DINNER, EXIT)' 
-  })
-  @IsEnum(CheckInType)
-  type: CheckInType;
-
-  @ApiPropertyOptional({ example: 'Volunteer John', description: 'Name of person who scanned' })
-  @IsOptional()
   @IsString()
-  scannedBy?: string;
+  @IsIn(['entry', 'lunch', 'dinner', 'kit'])
+  type: string;
 
-  @ApiPropertyOptional({ example: false, description: 'Whether delegate attended instead' })
+  @IsString()
   @IsOptional()
-  @IsBoolean()
-  wasDelegate?: boolean;
+  scannedBy?: string;
 }
