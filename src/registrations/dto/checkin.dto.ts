@@ -1,11 +1,16 @@
-import { IsString, IsOptional, IsIn } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
 
 export class CheckInDto {
+  @IsNotEmpty()
   @IsString()
-  @IsIn(['entry', 'lunch', 'dinner', 'kit'])
-  type: string;
+  @IsIn(['entry', 'lunch', 'dinner', 'session'])
+  type: 'entry' | 'lunch' | 'dinner' | 'session';
 
-  @IsString()
   @IsOptional()
+  @IsString()
   scannedBy?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  wasDelegate?: boolean;
 }

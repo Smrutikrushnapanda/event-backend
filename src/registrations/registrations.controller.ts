@@ -126,7 +126,6 @@ export class RegistrationsController {
     return this.registrationsService.checkAadhaar(aadhaarOrId);
   }
 
-  // ✅ Get export statistics
   @Get('export/stats')
   @ApiOperation({ summary: 'Get statistics for export planning' })
   @ApiResponse({ status: 200, description: 'Export statistics' })
@@ -157,7 +156,6 @@ export class RegistrationsController {
     }
   }
 
-  // ✅ Export to CSV
   @Get('export/csv')
   @ApiOperation({ summary: 'Export all registrations to CSV (fast, no images)' })
   @ApiResponse({ status: 200, description: 'CSV file generated successfully' })
@@ -183,7 +181,6 @@ export class RegistrationsController {
     }
   }
 
-  // ✅ Export all to Excel
   @Get('export/excel')
   @ApiOperation({ summary: 'Export all registrations to Excel with QR codes' })
   @ApiResponse({ status: 200, description: 'Excel file generated successfully' })
@@ -209,7 +206,6 @@ export class RegistrationsController {
     }
   }
 
-  // ✅ Export block to Excel
   @Get('export/excel/:blockName')
   @ApiOperation({ summary: 'Export block registrations to Excel with QR codes' })
   @ApiParam({ name: 'blockName', example: 'Bhubaneswar' })
@@ -239,7 +235,6 @@ export class RegistrationsController {
     }
   }
 
-  // ✅ FIXED: Get by QR code
   @Get('qr/:qrCode')
   @ApiOperation({ summary: 'Get registration by QR code with check-in status' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
@@ -266,7 +261,6 @@ export class RegistrationsController {
 
       console.log('✅ Controller: Registration found:', registration.id, registration.name);
 
-      // Get check-ins separately
       const checkIns = await this.checkInRepository.find({
         where: { registration: { id: registration.id } },
         order: { scannedAt: 'ASC' },
@@ -274,11 +268,12 @@ export class RegistrationsController {
 
       console.log('✅ Controller: Found', checkIns.length, 'check-ins');
 
+      // ✅ Only 4 types: entry, lunch, dinner, session
       const hasCheckedIn = {
         entry: checkIns.some(c => c.type === 'entry'),
         lunch: checkIns.some(c => c.type === 'lunch'),
         dinner: checkIns.some(c => c.type === 'dinner'),
-        kit: checkIns.some(c => c.type === 'kit'),
+        session: checkIns.some(c => c.type === 'session'),
       };
 
       return {
@@ -331,7 +326,7 @@ export class RegistrationsController {
   }
 
   @Post('checkin/:qrCode')
-  @ApiOperation({ summary: 'Check-in for entry, lunch, or dinner' })
+  @ApiOperation({ summary: 'Check-in for entry, lunch, dinner, or session' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
   @ApiBody({
     schema: {
@@ -339,9 +334,9 @@ export class RegistrationsController {
       properties: {
         type: { 
           type: 'string', 
-          enum: ['entry', 'lunch', 'dinner'],
+          enum: ['entry', 'lunch', 'dinner', 'session'],
           example: 'entry',
-          description: 'Activity type: entry (check-in), lunch, or dinner'
+          description: 'Activity type: entry, lunch, dinner, or session'
         },
         scannedBy: { type: 'string', example: 'Volunteer', description: 'Optional: who scanned' },
       },
@@ -353,11 +348,11 @@ export class RegistrationsController {
   @ApiResponse({ status: 404, description: 'Registration not found' })
   async checkIn(
     @Param('qrCode') qrCode: string,
-    @Body() body: { type: string; scannedBy?: string },
+    @Body() body: CheckInDto,
   ) {
-    const validTypes = ['entry', 'lunch', 'dinner'];
+    const validTypes = ['entry', 'lunch', 'dinner', 'session'];
     if (!validTypes.includes(body.type)) {
-      throw new BadRequestException('Invalid activity type');
+      throw new BadRequestException('Invalid activity type. Must be: entry, lunch, dinner, or session');
     }
 
     const registration = await this.registrationsService.findByQrCode(qrCode);
@@ -368,8 +363,8 @@ export class RegistrationsController {
 
     const existingCheckIn = await this.checkInRepository.findOne({
       where: {
-        registration: { id: registration.id },
-        type: body.type,
+        registrationId: registration.id,
+        type: body.type as 'entry' | 'lunch' | 'dinner' | 'session',
       },
     });
 
@@ -378,9 +373,10 @@ export class RegistrationsController {
     }
 
     const checkIn = this.checkInRepository.create({
-      type: body.type,
-      registration,
-      wasDelegate: false,
+      type: body.type as 'entry' | 'lunch' | 'dinner' | 'session',
+      registrationId: registration.id,
+      scannedBy: body.scannedBy || 'System',
+      wasDelegate: body.wasDelegate || false,
     });
 
     await this.checkInRepository.save(checkIn);
@@ -396,48 +392,7 @@ export class RegistrationsController {
     };
   }
 
-  @Post('distribute-kit/:qrCode')
-  @ApiOperation({ summary: 'Distribute kit to participant' })
-  @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
-  @ApiResponse({ status: 201, description: 'Kit distributed successfully' })
-  @ApiResponse({ status: 400, description: 'Kit already distributed' })
-  @ApiResponse({ status: 404, description: 'Registration not found' })
-  async distributeKit(@Param('qrCode') qrCode: string) {
-    const registration = await this.registrationsService.findByQrCode(qrCode);
-    
-    if (!registration) {
-      throw new NotFoundException('Registration not found');
-    }
-
-    const existingKit = await this.checkInRepository.findOne({
-      where: {
-        registration: { id: registration.id },
-        type: 'kit',
-      },
-    });
-
-    if (existingKit) {
-      throw new BadRequestException('Kit already distributed');
-    }
-
-    const kitDistribution = this.checkInRepository.create({
-      type: 'kit',
-      registration,
-      wasDelegate: false,
-    });
-
-    await this.checkInRepository.save(kitDistribution);
-
-    return {
-      message: 'Kit distributed successfully',
-      registration: {
-        id: registration.id,
-        name: registration.name,
-        qrCode: registration.qrCode,
-      },
-      distributedAt: kitDistribution.scannedAt,
-    };
-  }
+  // ✅ REMOVED: Kit distribution endpoint
 
   @Post(':id/delegate')
   @ApiOperation({ summary: 'Add delegate/relative to registration' })

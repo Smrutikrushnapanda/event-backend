@@ -16,7 +16,6 @@ export class RegistrationsService {
   ) {}
 
   async create(dto: CreateRegistrationDto): Promise<Registration> {
-    // Check if mobile already exists
     const existingMobile = await this.registrationRepository.findOne({
       where: { mobile: dto.mobile },
     });
@@ -25,7 +24,6 @@ export class RegistrationsService {
       throw new ConflictException('Mobile number already registered');
     }
 
-    // Check if Aadhaar already exists
     const existingAadhaar = await this.registrationRepository.findOne({
       where: { aadhaarOrId: dto.aadhaarOrId },
     });
@@ -34,7 +32,6 @@ export class RegistrationsService {
       throw new ConflictException('Aadhaar/ID already registered');
     }
 
-    // Generate unique QR code
     const qrCode = this.generateQRCode();
 
     const registration = this.registrationRepository.create({
@@ -125,11 +122,12 @@ export class RegistrationsService {
     return this.registrationRepository.save(registration);
   }
 
+  // ✅ Only 4 types: entry, lunch, dinner, session
   async getCheckIns(id: string) {
     const registration = await this.findById(id);
 
     const checkIns = await this.checkInRepository.find({
-      where: { registration: { id } },
+      where: { registrationId: id },
       order: { scannedAt: 'ASC' },
     });
 
@@ -137,7 +135,7 @@ export class RegistrationsService {
       entry: checkIns.some(c => c.type === 'entry'),
       lunch: checkIns.some(c => c.type === 'lunch'),
       dinner: checkIns.some(c => c.type === 'dinner'),
-      kit: checkIns.some(c => c.type === 'kit'),
+      session: checkIns.some(c => c.type === 'session'),
     };
 
     return {
@@ -153,9 +151,9 @@ export class RegistrationsService {
     };
   }
 
-  // ✅ Export methods
   async findAllForExport(): Promise<Registration[]> {
     return this.registrationRepository.find({
+      relations: ['checkIns'],
       order: { createdAt: 'DESC' },
     });
   }
@@ -163,6 +161,7 @@ export class RegistrationsService {
   async findByBlockForExport(block: string): Promise<Registration[]> {
     return this.registrationRepository.find({
       where: { block },
+      relations: ['checkIns'],
       order: { createdAt: 'DESC' },
     });
   }
