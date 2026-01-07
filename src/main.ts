@@ -12,7 +12,7 @@ async function bootstrap() {
  app.enableCors({
   origin: '*',
   credentials: true,
-});
+}); 
 
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
     prefix: '/uploads/',
