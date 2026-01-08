@@ -5,6 +5,7 @@ import { Registration } from './entities/registrations.entity';
 import { CheckIn } from './entities/checkin.entity';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { AddDelegateDto } from './dto/add-delegate.dto';
+import { StatisticsResponseDto } from './dto/statistics-response.dto';
 
 @Injectable()
 export class RegistrationsService {
@@ -122,7 +123,6 @@ export class RegistrationsService {
     return this.registrationRepository.save(registration);
   }
 
-  // ✅ Only 4 types: entry, lunch, dinner, session
   async getCheckIns(id: string) {
     const registration = await this.findById(id);
 
@@ -164,6 +164,109 @@ export class RegistrationsService {
       relations: ['checkIns'],
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async getStatistics(includeBlockWise = false): Promise<StatisticsResponseDto> {
+    // Get total registrations
+    const totalRegistrations = await this.registrationRepository.count();
+
+    // Get total delegates attending
+    const totalDelegatesAttending = await this.registrationRepository.count({
+      where: { isDelegateAttending: true },
+    });
+
+    // Get check-in statistics
+    const entryCheckIns = await this.checkInRepository.count({
+      where: { type: 'entry' },
+    });
+
+    const lunchCheckIns = await this.checkInRepository.count({
+      where: { type: 'lunch' },
+    });
+
+    const dinnerCheckIns = await this.checkInRepository.count({
+      where: { type: 'dinner' },
+    });
+
+    const sessionCheckIns = await this.checkInRepository.count({
+      where: { type: 'session' },
+    });
+
+    const totalCheckIns = entryCheckIns + lunchCheckIns + dinnerCheckIns + sessionCheckIns;
+
+    // Prepare base response
+    const response: any = {
+      totalRegistrations,
+      totalAttendees: entryCheckIns,
+      totalDelegatesAttending,
+      checkIns: {
+        entry: entryCheckIns,
+        lunch: lunchCheckIns,
+        dinner: dinnerCheckIns,
+        session: sessionCheckIns,
+        total: totalCheckIns,
+      },
+      generatedAt: new Date(),
+    };
+
+    // Add block-wise statistics if requested
+    if (includeBlockWise) {
+      const blocks = await this.registrationRepository
+        .createQueryBuilder('registration')
+        .select('registration.block', 'block')
+        .groupBy('registration.block')
+        .getRawMany();
+
+      const blockWiseStats = await Promise.all(
+        blocks.map(async ({ block }) => {
+          const totalRegistrations = await this.registrationRepository.count({
+            where: { block },
+          });
+
+          // Get check-ins for this block
+          const entryCount = await this.checkInRepository
+            .createQueryBuilder('checkIn')
+            .leftJoin('checkIn.registration', 'registration')
+            .where('registration.block = :block', { block })
+            .andWhere('checkIn.type = :type', { type: 'entry' })
+            .getCount();
+
+          const lunchCount = await this.checkInRepository
+            .createQueryBuilder('checkIn')
+            .leftJoin('checkIn.registration', 'registration')
+            .where('registration.block = :block', { block })
+            .andWhere('checkIn.type = :type', { type: 'lunch' })
+            .getCount();
+
+          const dinnerCount = await this.checkInRepository
+            .createQueryBuilder('checkIn')
+            .leftJoin('checkIn.registration', 'registration')
+            .where('registration.block = :block', { block })
+            .andWhere('checkIn.type = :type', { type: 'dinner' })
+            .getCount();
+
+          const sessionCount = await this.checkInRepository
+            .createQueryBuilder('checkIn')
+            .leftJoin('checkIn.registration', 'registration')
+            .where('registration.block = :block', { block })
+            .andWhere('checkIn.type = :type', { type: 'session' })
+            .getCount();
+
+          return {
+            block,
+            totalRegistrations,
+            entryCheckIns: entryCount,
+            lunchCheckIns: lunchCount,
+            dinnerCheckIns: dinnerCount,
+            sessionCheckIns: sessionCount,
+          };
+        })
+      );
+
+      response.blockWiseStats = blockWiseStats;
+    }
+
+    return response;
   }
 
   private generateQRCode(): string {

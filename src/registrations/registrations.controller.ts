@@ -28,11 +28,12 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import type { Response } from 'express';
 import { RegistrationsService } from './registrations.service';
+import { ExcelExportService } from './excel-export.service';
+import { QRCodePDFService } from './qrcode-pdf.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { CheckInDto } from './dto/checkin.dto';
 import { AddDelegateDto } from './dto/add-delegate.dto';
 import { CheckIn } from './entities/checkin.entity';
-import { ExcelExportService } from './excel-export.service';
 
 @ApiTags('Registrations')
 @Controller('registrations')
@@ -40,9 +41,10 @@ export class RegistrationsController {
 
   constructor(
     private readonly registrationsService: RegistrationsService,
+    private readonly excelExportService: ExcelExportService,
+    private readonly qrCodePDFService: QRCodePDFService,
     @InjectRepository(CheckIn)
     private checkInRepository: Repository<CheckIn>,
-    private readonly excelExportService: ExcelExportService,
   ) {}
 
   @Post()
@@ -124,6 +126,57 @@ export class RegistrationsController {
   })
   checkAadhaar(@Body('aadhaarOrId') aadhaarOrId: string) {
     return this.registrationsService.checkAadhaar(aadhaarOrId);
+  }
+
+  @Get('statistics')
+  @ApiOperation({ summary: 'Get event statistics (registrations, check-ins, etc.)' })
+  @ApiQuery({ 
+    name: 'includeBlockWise', 
+    required: false, 
+    type: Boolean,
+    description: 'Include block-wise breakdown in response',
+    example: false 
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Returns comprehensive event statistics',
+    schema: {
+      type: 'object',
+      properties: {
+        totalRegistrations: { type: 'number', example: 500 },
+        totalAttendees: { type: 'number', example: 450 },
+        totalDelegatesAttending: { type: 'number', example: 25 },
+        checkIns: {
+          type: 'object',
+          properties: {
+            entry: { type: 'number', example: 450 },
+            lunch: { type: 'number', example: 380 },
+            dinner: { type: 'number', example: 320 },
+            session: { type: 'number', example: 410 },
+            total: { type: 'number', example: 1560 },
+          },
+        },
+        blockWiseStats: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              block: { type: 'string', example: 'Bhubaneswar' },
+              totalRegistrations: { type: 'number', example: 150 },
+              entryCheckIns: { type: 'number', example: 120 },
+              lunchCheckIns: { type: 'number', example: 100 },
+              dinnerCheckIns: { type: 'number', example: 90 },
+              sessionCheckIns: { type: 'number', example: 110 },
+            },
+          },
+        },
+        generatedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  async getStatistics(@Query('includeBlockWise') includeBlockWise?: string) {
+    const includeBlocks = includeBlockWise === 'true';
+    return this.registrationsService.getStatistics(includeBlocks);
   }
 
   @Get('export/stats')
@@ -268,7 +321,6 @@ export class RegistrationsController {
 
       console.log('✅ Controller: Found', checkIns.length, 'check-ins');
 
-      // ✅ Only 4 types: entry, lunch, dinner, session
       const hasCheckedIn = {
         entry: checkIns.some(c => c.type === 'entry'),
         lunch: checkIns.some(c => c.type === 'lunch'),
@@ -392,8 +444,6 @@ export class RegistrationsController {
     };
   }
 
-  // ✅ REMOVED: Kit distribution endpoint
-
   @Post(':id/delegate')
   @ApiOperation({ summary: 'Add delegate/relative to registration' })
   @ApiConsumes('multipart/form-data')
@@ -461,5 +511,110 @@ export class RegistrationsController {
   @ApiResponse({ status: 404, description: 'Registration not found' })
   getCheckIns(@Param('id') id: string) {
     return this.registrationsService.getCheckIns(id);
+  }
+
+   @Get('export/qr-pdf')
+  @ApiOperation({ summary: 'Export all registrations as QR code labels PDF (10mm x 10mm)' })
+  @ApiResponse({ status: 200, description: 'PDF with QR code labels generated successfully' })
+  async exportQRCodePDF(@Res() res: Response) {
+    try {
+      const registrations = await this.registrationsService.findAllForExport();
+      
+      console.log(`📄 Generating QR code PDF for ${registrations.length} registrations...`);
+
+      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDF(registrations);
+
+      const filename = `MPSO_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', pdfBuffer.length.toString());
+
+      res.send(pdfBuffer);
+      console.log('✅ QR code PDF sent successfully');
+    } catch (error) {
+      console.error('❌ QR PDF export error:', error);
+      res.status(500).json({ error: 'Failed to generate QR code PDF' });
+    }
+  }
+
+  @Get('export/qr-pdf/:blockName')
+  @ApiOperation({ summary: 'Export block registrations as QR code labels PDF (10mm x 10mm)' })
+  @ApiParam({ name: 'blockName', example: 'Bhubaneswar' })
+  @ApiResponse({ status: 200, description: 'PDF with QR code labels generated successfully' })
+  async exportBlockQRCodePDF(
+    @Param('blockName') blockName: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const registrations = await this.registrationsService.findByBlockForExport(blockName);
+
+      console.log(`📄 Generating QR code PDF for ${blockName} block (${registrations.length} registrations)...`);
+
+      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDFForBlock(registrations, blockName);
+
+      const filename = `${blockName}_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', pdfBuffer.length.toString());
+
+      res.send(pdfBuffer);
+      console.log('✅ Block QR code PDF sent successfully');
+    } catch (error) {
+      console.error('❌ Block QR PDF export error:', error);
+      res.status(500).json({ error: 'Failed to generate QR code PDF' });
+    }
+  }
+
+  @Post('export/qr-pdf/from-csv')
+  @ApiOperation({ summary: 'Upload CSV and generate QR code labels PDF' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'CSV file with QR codes, names, and blocks' },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'PDF generated from CSV' })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      fileFilter: (req, file, callback) => {
+        if (!file.originalname.match(/\.(csv)$/)) {
+          return callback(new Error('Only CSV files are allowed!'), false);
+        }
+        callback(null, true);
+      },
+    }),
+  )
+  async exportQRCodePDFFromCSV(
+    @UploadedFile() file: Express.Multer.File,
+    @Res() res: Response,
+  ) {
+    try {
+      if (!file) {
+        throw new BadRequestException('CSV file is required');
+      }
+
+      console.log('📄 Generating QR PDF from uploaded CSV...');
+
+      const csvContent = file.buffer.toString('utf-8');
+      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDFFromCSV(csvContent);
+
+      const filename = `QR_Codes_From_CSV_${new Date().toISOString().split('T')[0]}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', pdfBuffer.length.toString());
+
+      res.send(pdfBuffer);
+      console.log('✅ QR code PDF from CSV sent successfully');
+    } catch (error) {
+      console.error('❌ CSV to QR PDF error:', error);
+      res.status(500).json({ error: 'Failed to generate QR code PDF from CSV' });
+    }
   }
 }
