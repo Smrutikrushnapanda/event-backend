@@ -5,10 +5,15 @@ import {
   ManyToOne,
   JoinColumn,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 import { Registration } from './registrations.entity';
 
 @Entity('check_ins')
+@Index(['registrationId', 'type'], { unique: true })
+@Index(['type'])
+@Index(['scannedAt'])
+@Index(['registrationId'])
 export class CheckIn {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -17,9 +22,9 @@ export class CheckIn {
     type: 'varchar',
     length: 20,
   })
-  type: 'entry' | 'lunch' | 'dinner' | 'session'; // ✅ No 'kit'
+  type: 'entry' | 'lunch' | 'dinner' | 'session';
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, length: 50 })
   scannedBy: string;
 
   @Column({ default: false })

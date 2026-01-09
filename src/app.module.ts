@@ -10,15 +10,25 @@ import { AuthModule } from './auth/auth.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
-      type: 'postgres',
-      url: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-      autoLoadEntities: true,
-      synchronize: true, // OK for now
-      logging: true,
-    }),
+  type: 'postgres',
+  url: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+  autoLoadEntities: true,
+  synchronize: false, // ✅ CHANGE FROM true TO false
+  logging: true,
+  
+  extra: {
+    max: 30,
+    min: 5,
+    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: 1800000,
+    query_timeout: 60000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+  },
+}),
     RegistrationsModule,
     VolunteersModule,
     AuthModule,

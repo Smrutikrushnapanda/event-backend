@@ -11,6 +11,8 @@ import {
   NotFoundException,
   BadRequestException,
   Res,
+    HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -617,4 +619,58 @@ export class RegistrationsController {
       res.status(500).json({ error: 'Failed to generate QR code PDF from CSV' });
     }
   }
+
+  @Post('fast-checkin/:qrCode')
+@HttpCode(HttpStatus.OK)
+@ApiOperation({ 
+  summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
+  description: 'Optimized endpoint for high-volume event scanning.',
+})
+@ApiResponse({ status: 200, description: 'Check-in processed' })
+async fastCheckIn(
+  @Param('qrCode') qrCode: string,
+  @Body() body: CheckInDto,
+) {
+  return this.registrationsService.fastCheckIn(
+    qrCode,
+    body.type,
+    body.scannedBy,
+    body.wasDelegate,
+  );
+}
+
+@Post('bulk')
+@ApiOperation({ 
+  summary: 'Bulk registration upload',
+  description: 'Upload multiple registrations at once.',
+})
+@ApiResponse({ status: 201, description: 'Bulk upload completed' })
+async bulkCreate(@Body() dto: { registrations: any[] }) {
+  return this.registrationsService.createBulk(dto.registrations);
+}
+
+@Post('admin/preload-cache')
+@ApiOperation({ 
+  summary: '🔄 Pre-load all registrations into cache',
+  description: 'Call this 1 hour before event.',
+})
+@ApiResponse({ status: 200, description: 'Cache pre-loaded' })
+async preloadCache() {
+  await this.registrationsService.preloadCache();
+  return {
+    message: 'Cache pre-load started. This may take 2-3 minutes for 20k registrations.',
+    timestamp: new Date(),
+  };
+}
+
+@Get('admin/health')
+@ApiOperation({ summary: '💚 System health check' })
+@ApiResponse({ status: 200 })
+async healthCheck() {
+  const health = await this.registrationsService.healthCheck();
+  return {
+    ...health,
+    timestamp: new Date(),
+  };
+}
 }

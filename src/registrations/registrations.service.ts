@@ -1,11 +1,17 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { 
+  Injectable, 
+  ConflictException, 
+  NotFoundException, 
+  BadRequestException 
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Registration } from './entities/registrations.entity';
 import { CheckIn } from './entities/checkin.entity';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { AddDelegateDto } from './dto/add-delegate.dto';
 import { StatisticsResponseDto } from './dto/statistics-response.dto';
+import { RegistrationCacheService } from './registration-cache.service';
 
 @Injectable()
 export class RegistrationsService {
@@ -14,22 +20,21 @@ export class RegistrationsService {
     private registrationRepository: Repository<Registration>,
     @InjectRepository(CheckIn)
     private checkInRepository: Repository<CheckIn>,
+    private cacheService: RegistrationCacheService,
   ) {}
 
   async create(dto: CreateRegistrationDto): Promise<Registration> {
-    const existingMobile = await this.registrationRepository.findOne({
-      where: { mobile: dto.mobile },
+    const existing = await this.registrationRepository.findOne({
+      where: [
+        { mobile: dto.mobile },
+        { aadhaarOrId: dto.aadhaarOrId },
+      ],
     });
 
-    if (existingMobile) {
-      throw new ConflictException('Mobile number already registered');
-    }
-
-    const existingAadhaar = await this.registrationRepository.findOne({
-      where: { aadhaarOrId: dto.aadhaarOrId },
-    });
-
-    if (existingAadhaar) {
+    if (existing) {
+      if (existing.mobile === dto.mobile) {
+        throw new ConflictException('Mobile number already registered');
+      }
       throw new ConflictException('Aadhaar/ID already registered');
     }
 
@@ -40,7 +45,272 @@ export class RegistrationsService {
       qrCode,
     });
 
-    return this.registrationRepository.save(registration);
+    const saved = await this.registrationRepository.save(registration);
+    
+    this.cacheService.invalidateRegistration(qrCode).catch(err => {
+      console.error('Cache update failed:', err);
+    });
+    
+    return saved;
+  }
+
+  async createBulk(dtos: CreateRegistrationDto[]): Promise<{ 
+  success: number; 
+  failed: number; 
+  errors: Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }> 
+}> {
+  const results = {
+    success: 0,
+    failed: 0,
+    errors: [] as Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }>,
+  };
+
+  const chunkSize = 100;
+  
+  for (let i = 0; i < dtos.length; i += chunkSize) {
+    const chunk = dtos.slice(i, i + chunkSize);
+    
+    const mobiles = chunk.map(d => d.mobile);
+    const aadhaarIds = chunk.map(d => d.aadhaarOrId);
+    
+    const existingRecords = await this.registrationRepository.find({
+      where: [
+        { mobile: In(mobiles) },
+        { aadhaarOrId: In(aadhaarIds) },
+      ],
+      select: ['mobile', 'aadhaarOrId'],
+    });
+    
+    const existingMobiles = new Set(existingRecords.map(r => r.mobile));
+    const existingAadhaar = new Set(existingRecords.map(r => r.aadhaarOrId));
+    
+    // ✅ FIX: Explicitly type the array
+    const validRegistrations: Array<Partial<Registration> & { qrCode: string }> = [];
+    
+    for (const dto of chunk) {
+      if (existingMobiles.has(dto.mobile)) {
+        results.failed++;
+        results.errors.push({
+          mobile: dto.mobile,
+          error: 'Mobile already registered',
+        });
+        continue;
+      }
+      
+      if (existingAadhaar.has(dto.aadhaarOrId)) {
+        results.failed++;
+        results.errors.push({
+          aadhaarOrId: dto.aadhaarOrId,
+          error: 'Aadhaar already registered',
+        });
+        continue;
+      }
+      
+      validRegistrations.push({
+        ...dto,
+        qrCode: this.generateQRCode(),
+      });
+      
+      existingMobiles.add(dto.mobile);
+      existingAadhaar.add(dto.aadhaarOrId);
+    }
+    
+    if (validRegistrations.length > 0) {
+      try {
+        await this.registrationRepository.insert(validRegistrations);
+        results.success += validRegistrations.length;
+      } catch (error) {
+        console.error('Bulk insert error:', error);
+        results.failed += validRegistrations.length;
+        results.errors.push({
+          chunk: i,
+          error: error.message,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+  async findByQrCode(qrCode: string): Promise<Registration | null> {
+    try {
+      const cached = await this.cacheService.getByQrCode(qrCode);
+      
+      if (cached) {
+        return cached as Registration;
+      }
+      
+      console.log('⚠️ Cache miss for QR:', qrCode);
+      return await this.registrationRepository.findOne({
+        where: { qrCode },
+        relations: ['checkIns'],
+      });
+    } catch (error) {
+      console.error('❌ QR lookup error:', error);
+      return await this.registrationRepository.findOne({
+        where: { qrCode },
+        relations: ['checkIns'],
+      });
+    }
+  }
+
+  async fastCheckIn(
+    qrCode: string,
+    checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
+    scannedBy?: string,
+    wasDelegate: boolean = false,
+  ): Promise<{ success: boolean; message: string; registration?: any }> {
+    try {
+      const registration = await this.cacheService.getByQrCode(qrCode);
+      
+      if (!registration) {
+        return {
+          success: false,
+          message: 'Registration not found',
+        };
+      }
+
+      const checkInStatusMap = {
+        entry: 'hasEntryCheckIn',
+        lunch: 'hasLunchCheckIn',
+        dinner: 'hasDinnerCheckIn',
+        session: 'hasSessionCheckIn',
+      };
+      
+      if (registration[checkInStatusMap[checkInType]]) {
+        return {
+          success: false,
+          message: `${checkInType} already marked`,
+          registration,
+        };
+      }
+
+      const checkIn = this.checkInRepository.create({
+        type: checkInType,
+        registrationId: registration.id,
+        scannedBy: scannedBy || 'Volunteer',
+        wasDelegate,
+      });
+
+      this.checkInRepository.save(checkIn).catch(err => {
+        console.error('❌ Check-in save error:', err);
+      });
+
+      this.cacheService.updateCheckInStatus(qrCode, checkInType).catch(err => {
+        console.error('❌ Cache update error:', err);
+      });
+
+      return {
+        success: true,
+        message: `${checkInType} marked successfully`,
+        registration: {
+          ...registration,
+          [checkInStatusMap[checkInType]]: true,
+        },
+      };
+    } catch (error) {
+      console.error('❌ Fast check-in error:', error);
+      return {
+        success: false,
+        message: 'Check-in failed. Please try again.',
+      };
+    }
+  }
+
+  async checkAadhaar(aadhaarOrId: string) {
+    const registration = await this.registrationRepository.findOne({
+      where: { aadhaarOrId },
+    });
+
+    if (registration) {
+      return {
+        exists: true,
+        qrCode: registration.qrCode,
+        name: registration.name,
+      };
+    }
+
+    return { exists: false };
+  }
+
+  async getStatistics(includeBlockWise = false): Promise<StatisticsResponseDto> {
+    const [
+      totalRegistrations,
+      totalDelegatesAttending,
+      entryCheckIns,
+      lunchCheckIns,
+      dinnerCheckIns,
+      sessionCheckIns,
+    ] = await Promise.all([
+      this.registrationRepository.count(),
+      this.registrationRepository.count({ where: { isDelegateAttending: true } }),
+      this.checkInRepository.count({ where: { type: 'entry' } }),
+      this.checkInRepository.count({ where: { type: 'lunch' } }),
+      this.checkInRepository.count({ where: { type: 'dinner' } }),
+      this.checkInRepository.count({ where: { type: 'session' } }),
+    ]);
+
+    const totalCheckIns = entryCheckIns + lunchCheckIns + dinnerCheckIns + sessionCheckIns;
+
+    const response: any = {
+      totalRegistrations,
+      totalAttendees: entryCheckIns,
+      totalDelegatesAttending,
+      checkIns: {
+        entry: entryCheckIns,
+        lunch: lunchCheckIns,
+        dinner: dinnerCheckIns,
+        session: sessionCheckIns,
+        total: totalCheckIns,
+      },
+      generatedAt: new Date(),
+    };
+
+    if (includeBlockWise) {
+      const blockStats = await this.registrationRepository
+        .createQueryBuilder('reg')
+        .select('reg.block', 'block')
+        .addSelect('COUNT(DISTINCT reg.id)', 'totalRegistrations')
+        .leftJoin('reg.checkIns', 'checkIn')
+        .addSelect(
+          `COUNT(DISTINCT CASE WHEN checkIn.type = 'entry' THEN checkIn.id END)`,
+          'entryCheckIns'
+        )
+        .addSelect(
+          `COUNT(DISTINCT CASE WHEN checkIn.type = 'lunch' THEN checkIn.id END)`,
+          'lunchCheckIns'
+        )
+        .addSelect(
+          `COUNT(DISTINCT CASE WHEN checkIn.type = 'dinner' THEN checkIn.id END)`,
+          'dinnerCheckIns'
+        )
+        .addSelect(
+          `COUNT(DISTINCT CASE WHEN checkIn.type = 'session' THEN checkIn.id END)`,
+          'sessionCheckIns'
+        )
+        .groupBy('reg.block')
+        .getRawMany();
+
+      response.blockWiseStats = blockStats;
+    }
+
+    return response;
+  }
+
+  async findAllForExport(): Promise<Registration[]> {
+    return this.registrationRepository.find({
+      relations: ['checkIns'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async findByBlockForExport(block: string): Promise<Registration[]> {
+    return this.registrationRepository.find({
+      where: { block },
+      relations: ['checkIns'],
+      order: { createdAt: 'DESC' },
+    });
   }
 
   async findAll(): Promise<Registration[]> {
@@ -63,69 +333,25 @@ export class RegistrationsService {
     return registration;
   }
 
-  async findByQrCode(qrCode: string): Promise<Registration | null> {
-    try {
-      console.log('🔍 Service: Looking up QR code:', qrCode);
-      
-      const registration = await this.registrationRepository.findOne({
-        where: { qrCode },
-        relations: ['checkIns'],
-      });
-
-      if (registration) {
-        console.log('✅ Service: Found registration:', registration.id);
-      } else {
-        console.log('❌ Service: No registration found');
-      }
-
-      return registration;
-    } catch (error) {
-      console.error('❌ Service: Error finding registration:', error);
-      throw error;
-    }
-  }
-
-  async checkAadhaar(aadhaarOrId: string) {
-    const registration = await this.registrationRepository.findOne({
-      where: { aadhaarOrId },
-    });
-
-    if (registration) {
-      return {
-        exists: true,
-        qrCode: registration.qrCode,
-        name: registration.name,
-      };
-    }
-
-    return { exists: false };
-  }
-
   async addDelegate(id: string, dto: AddDelegateDto): Promise<Registration> {
     const registration = await this.findById(id);
-
     registration.delegateName = dto.delegateName;
     registration.delegateMobile = dto.delegateMobile;
     registration.delegatePhotoUrl = dto.delegatePhotoUrl;
-
     return this.registrationRepository.save(registration);
   }
 
   async toggleDelegate(id: string, isDelegateAttending: boolean): Promise<Registration> {
     const registration = await this.findById(id);
-
     if (!registration.delegateName) {
       throw new BadRequestException('No delegate registered for this user');
     }
-
     registration.isDelegateAttending = isDelegateAttending;
-
     return this.registrationRepository.save(registration);
   }
 
   async getCheckIns(id: string) {
     const registration = await this.findById(id);
-
     const checkIns = await this.checkInRepository.find({
       where: { registrationId: id },
       order: { scannedAt: 'ASC' },
@@ -151,124 +377,6 @@ export class RegistrationsService {
     };
   }
 
-  async findAllForExport(): Promise<Registration[]> {
-    return this.registrationRepository.find({
-      relations: ['checkIns'],
-      order: { createdAt: 'DESC' },
-    });
-  }
-
-  async findByBlockForExport(block: string): Promise<Registration[]> {
-    return this.registrationRepository.find({
-      where: { block },
-      relations: ['checkIns'],
-      order: { createdAt: 'DESC' },
-    });
-  }
-
-  async getStatistics(includeBlockWise = false): Promise<StatisticsResponseDto> {
-    // Get total registrations
-    const totalRegistrations = await this.registrationRepository.count();
-
-    // Get total delegates attending
-    const totalDelegatesAttending = await this.registrationRepository.count({
-      where: { isDelegateAttending: true },
-    });
-
-    // Get check-in statistics
-    const entryCheckIns = await this.checkInRepository.count({
-      where: { type: 'entry' },
-    });
-
-    const lunchCheckIns = await this.checkInRepository.count({
-      where: { type: 'lunch' },
-    });
-
-    const dinnerCheckIns = await this.checkInRepository.count({
-      where: { type: 'dinner' },
-    });
-
-    const sessionCheckIns = await this.checkInRepository.count({
-      where: { type: 'session' },
-    });
-
-    const totalCheckIns = entryCheckIns + lunchCheckIns + dinnerCheckIns + sessionCheckIns;
-
-    // Prepare base response
-    const response: any = {
-      totalRegistrations,
-      totalAttendees: entryCheckIns,
-      totalDelegatesAttending,
-      checkIns: {
-        entry: entryCheckIns,
-        lunch: lunchCheckIns,
-        dinner: dinnerCheckIns,
-        session: sessionCheckIns,
-        total: totalCheckIns,
-      },
-      generatedAt: new Date(),
-    };
-
-    // Add block-wise statistics if requested
-    if (includeBlockWise) {
-      const blocks = await this.registrationRepository
-        .createQueryBuilder('registration')
-        .select('registration.block', 'block')
-        .groupBy('registration.block')
-        .getRawMany();
-
-      const blockWiseStats = await Promise.all(
-        blocks.map(async ({ block }) => {
-          const totalRegistrations = await this.registrationRepository.count({
-            where: { block },
-          });
-
-          // Get check-ins for this block
-          const entryCount = await this.checkInRepository
-            .createQueryBuilder('checkIn')
-            .leftJoin('checkIn.registration', 'registration')
-            .where('registration.block = :block', { block })
-            .andWhere('checkIn.type = :type', { type: 'entry' })
-            .getCount();
-
-          const lunchCount = await this.checkInRepository
-            .createQueryBuilder('checkIn')
-            .leftJoin('checkIn.registration', 'registration')
-            .where('registration.block = :block', { block })
-            .andWhere('checkIn.type = :type', { type: 'lunch' })
-            .getCount();
-
-          const dinnerCount = await this.checkInRepository
-            .createQueryBuilder('checkIn')
-            .leftJoin('checkIn.registration', 'registration')
-            .where('registration.block = :block', { block })
-            .andWhere('checkIn.type = :type', { type: 'dinner' })
-            .getCount();
-
-          const sessionCount = await this.checkInRepository
-            .createQueryBuilder('checkIn')
-            .leftJoin('checkIn.registration', 'registration')
-            .where('registration.block = :block', { block })
-            .andWhere('checkIn.type = :type', { type: 'session' })
-            .getCount();
-
-          return {
-            block,
-            totalRegistrations,
-            entryCheckIns: entryCount,
-            lunchCheckIns: lunchCount,
-            dinnerCheckIns: dinnerCount,
-            sessionCheckIns: sessionCount,
-          };
-        })
-      );
-
-      response.blockWiseStats = blockWiseStats;
-    }
-
-    return response;
-  }
-
   private generateQRCode(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = 'EVENT-';
@@ -278,5 +386,21 @@ export class RegistrationsService {
     }
     
     return code;
+  }
+
+  async preloadCache(): Promise<void> {
+    await this.cacheService.preloadAllRegistrations();
+  }
+
+  async healthCheck(): Promise<{ database: boolean; cache: boolean }> {
+    const [dbHealthy, cacheHealthy] = await Promise.all([
+      this.registrationRepository.query('SELECT 1').then(() => true).catch(() => false),
+      this.cacheService.isHealthy(),
+    ]);
+
+    return {
+      database: dbHealthy,
+      cache: cacheHealthy,
+    };
   }
 }
