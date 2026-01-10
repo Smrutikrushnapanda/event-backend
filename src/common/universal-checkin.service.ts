@@ -24,7 +24,7 @@ export class UniversalCheckInService {
     private guestCheckInRepo: Repository<GuestCheckIn>,
   ) {}
 
-  // ✅ NEW: Lookup without check-in
+  // ✅ Lookup without check-in
   async universalLookup(qrCode: string) {
     // Try farmer first
     const farmer = await this.registrationRepo.findOne({
@@ -97,7 +97,7 @@ export class UniversalCheckInService {
     throw new NotFoundException(`QR code ${qrCode} not found`);
   }
 
-  // ✅ Existing check-in method (unchanged)
+  // ✅ Check-in method
   async universalCheckIn(qrCode: string, type: CheckInType, scannedBy: string) {
     // Try farmer first
     const farmer = await this.registrationRepo.findOne({
@@ -249,7 +249,7 @@ export class UniversalCheckInService {
           hasCheckedIn,
           type,
           scannedBy: existing.scannedBy,
-          checkedInAt: existing.checkedInAt,
+          scannedAt: existing.scannedAt, // ✅ FIXED: Changed from checkedInAt to scannedAt
         },
       };
     }
@@ -295,7 +295,7 @@ export class UniversalCheckInService {
         hasCheckedIn,
         type,
         scannedBy,
-        checkedInAt: checkIn.checkedInAt,
+        scannedAt: checkIn.scannedAt, // ✅ FIXED: Changed from checkedInAt to scannedAt
       },
     };
   }

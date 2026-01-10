@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Param, Post } from '@nestjs/common';
 import { UniversalCheckInService } from './universal-checkin.service';
 import { IsIn, IsString } from 'class-validator';
 
@@ -14,9 +14,10 @@ class UniversalCheckInDto {
 export class UniversalCheckInController {
   constructor(private readonly service: UniversalCheckInService) {}
 
-  // ✅ NEW: Lookup without check-in
-  @Get(':qrCode/lookup')
+  // ✅ FIXED: Changed to POST method
+  @Post(':qrCode/lookup')
   async lookup(@Param('qrCode') qrCode: string) {
+    console.log('📋 Lookup request for QR:', qrCode);
     return this.service.universalLookup(qrCode);
   }
 
@@ -26,6 +27,7 @@ export class UniversalCheckInController {
     @Param('qrCode') qrCode: string,
     @Body() dto: UniversalCheckInDto,
   ) {
+    console.log('✅ Check-in request for QR:', qrCode, 'Type:', dto.type);
     return this.service.universalCheckIn(qrCode, dto.type, dto.scannedBy);
   }
 }
