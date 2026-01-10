@@ -6,7 +6,6 @@ import { CheckIn } from '../registrations/entities/checkin.entity';
 import { GuestPass } from '../guest-passes/entities/guest-pass.entity';
 import { GuestCheckIn } from '../guest-passes/entities/guest-checkin.entity';
 
-// ✅ ADD TYPE DEFINITION
 type CheckInType = 'entry' | 'lunch' | 'dinner' | 'session';
 
 @Injectable()
@@ -14,68 +13,40 @@ export class UniversalCheckInService {
   constructor(
     @InjectRepository(Registration)
     private registrationRepo: Repository<Registration>,
+    
     @InjectRepository(CheckIn)
     private checkInRepo: Repository<CheckIn>,
+    
     @InjectRepository(GuestPass)
     private guestPassRepo: Repository<GuestPass>,
+    
     @InjectRepository(GuestCheckIn)
     private guestCheckInRepo: Repository<GuestCheckIn>,
   ) {}
 
-  // ✅ UPDATE METHOD SIGNATURE
-  async universalCheckIn(
-    qrCode: string,
-    type: CheckInType,
-    scannedBy: string,
-  ) {
-    // First, try to find in farmer registrations
+  // ✅ NEW: Lookup without check-in
+  async universalLookup(qrCode: string) {
+    // Try farmer first
     const farmer = await this.registrationRepo.findOne({
       where: { qrCode },
     });
 
     if (farmer) {
-      // It's a farmer - use farmer check-in logic
-      return this.farmerCheckIn(farmer, type, scannedBy);
-    }
+      // Get existing check-ins
+      const checkIns = await this.checkInRepo.find({
+        where: { registration: { id: farmer.id } },
+      });
 
-    // If not farmer, try guest passes
-    const guestPass = await this.guestPassRepo.findOne({
-      where: { qrCode },
-    });
+      const hasCheckedIn = {
+        entry: checkIns.some(c => c.type === 'entry'),
+        lunch: checkIns.some(c => c.type === 'lunch'),
+        dinner: checkIns.some(c => c.type === 'dinner'),
+        session: checkIns.some(c => c.type === 'session'),
+      };
 
-    if (guestPass) {
-      // It's a guest pass - use guest check-in logic
-      return this.guestCheckIn(guestPass, type, scannedBy);
-    }
-
-    // QR code not found in either table
-    throw new NotFoundException({
-      success: false,
-      message: 'QR code not found',
-      error: 'This QR code is not registered in the system',
-    });
-  }
-
-  // ✅ UPDATE METHOD SIGNATURE
-  private async farmerCheckIn(
-    farmer: Registration,
-    type: CheckInType,
-    scannedBy: string,
-  ) {
-    // Check if already checked in
-    const existingCheckIn = await this.checkInRepo.findOne({
-      where: {
-        registration: { id: farmer.id }, // ✅ FIXED: Use relation
-        type,
-      },
-    });
-
-    if (existingCheckIn) {
       return {
-        success: false,
-        message: 'Already checked in',
-        alreadyCheckedIn: true,
-        attendeeType: 'FARMER',
+        success: true,
+        attendeeType: 'FARMER' as const,
         data: {
           name: farmer.name,
           mobile: farmer.mobile,
@@ -84,39 +55,146 @@ export class UniversalCheckInService {
           block: farmer.block,
           district: farmer.district,
           category: farmer.category,
-          checkedInAt: existingCheckIn.scannedAt,
+          photoUrl: farmer.photoUrl,
+          hasCheckedIn,
         },
       };
     }
 
-    // ✅ FIXED: Create check-in with proper relation
-    const checkInRecord = this.checkInRepo.create({
+    // Try guest
+    const guestPass = await this.guestPassRepo.findOne({
+      where: { qrCode },
+    });
+
+    if (guestPass) {
+      // Get existing check-ins
+      const checkIns = await this.guestCheckInRepo.find({
+        where: { guestPass: { id: guestPass.id } },
+      });
+
+      const hasCheckedIn = {
+        entry: checkIns.some(c => c.type === 'entry'),
+        lunch: checkIns.some(c => c.type === 'lunch'),
+        dinner: checkIns.some(c => c.type === 'dinner'),
+        session: checkIns.some(c => c.type === 'session'),
+      };
+
+      return {
+        success: true,
+        attendeeType: 'GUEST' as const,
+        data: {
+          qrCode: guestPass.qrCode,
+          category: guestPass.category,
+          sequenceNumber: guestPass.sequenceNumber,
+          isAssigned: guestPass.isAssigned,
+          name: guestPass.name,
+          mobile: guestPass.mobile,
+          hasCheckedIn,
+        },
+      };
+    }
+
+    throw new NotFoundException(`QR code ${qrCode} not found`);
+  }
+
+  // ✅ Existing check-in method (unchanged)
+  async universalCheckIn(qrCode: string, type: CheckInType, scannedBy: string) {
+    // Try farmer first
+    const farmer = await this.registrationRepo.findOne({
+      where: { qrCode },
+    });
+
+    if (farmer) {
+      return await this.farmerCheckIn(farmer, type, scannedBy);
+    }
+
+    // Try guest
+    const guestPass = await this.guestPassRepo.findOne({
+      where: { qrCode },
+    });
+
+    if (guestPass) {
+      return await this.guestCheckIn(guestPass, type, scannedBy);
+    }
+
+    throw new NotFoundException(`QR code ${qrCode} not found`);
+  }
+
+  private async farmerCheckIn(farmer: Registration, type: CheckInType, scannedBy: string) {
+    // Check if already checked in for this type
+    const existing = await this.checkInRepo.findOne({
+      where: {
+        registration: { id: farmer.id },
+        type,
+      },
+    });
+
+    if (existing) {
+      // Get all check-ins for status
+      const allCheckIns = await this.checkInRepo.find({
+        where: { registration: { id: farmer.id } },
+      });
+
+      const hasCheckedIn = {
+        entry: allCheckIns.some(c => c.type === 'entry'),
+        lunch: allCheckIns.some(c => c.type === 'lunch'),
+        dinner: allCheckIns.some(c => c.type === 'dinner'),
+        session: allCheckIns.some(c => c.type === 'session'),
+      };
+
+      return {
+        success: false,
+        message: `Already checked in for ${type}`,
+        attendeeType: 'FARMER' as const,
+        alreadyCheckedIn: true,
+        data: {
+          name: farmer.name,
+          mobile: farmer.mobile,
+          village: farmer.village,
+          gp: farmer.gp,
+          block: farmer.block,
+          district: farmer.district,
+          category: farmer.category,
+          photoUrl: farmer.photoUrl,
+          hasCheckedIn,
+          type,
+          scannedBy: existing.scannedBy,
+          scannedAt: existing.scannedAt,
+        },
+      };
+    }
+
+    // Create new check-in
+    const checkIn = this.checkInRepo.create({
       registration: farmer,
       type,
       scannedBy,
     });
 
-    this.checkInRepo
-      .save(checkInRecord)
-      .catch((err) => console.error('Async check-in save error:', err));
+    await this.checkInRepo.save(checkIn);
 
-    // Update status flags immediately
-    const updateData: any = {};
-    if (type === 'entry') updateData.hasEntryCheckIn = true;
-    if (type === 'lunch') updateData.hasLunchCheckIn = true;
-    if (type === 'dinner') updateData.hasDinnerCheckIn = true;
-    if (type === 'session') updateData.hasSessionCheckIn = true;
+    // Update status flags asynchronously
+    this.updateFarmerStatus(farmer.id, type).catch(err => 
+      console.error('Failed to update farmer status:', err)
+    );
 
-    if (Object.keys(updateData).length > 0) {
-      this.registrationRepo
-        .update({ id: farmer.id }, updateData)
-        .catch((err) => console.error('Async status update error:', err));
-    }
+    // Get updated check-ins
+    const allCheckIns = await this.checkInRepo.find({
+      where: { registration: { id: farmer.id } },
+    });
+
+    const hasCheckedIn = {
+      entry: allCheckIns.some(c => c.type === 'entry'),
+      lunch: allCheckIns.some(c => c.type === 'lunch'),
+      dinner: allCheckIns.some(c => c.type === 'dinner'),
+      session: allCheckIns.some(c => c.type === 'session'),
+    };
 
     return {
       success: true,
-      message: 'Check-in successful',
-      attendeeType: 'FARMER',
+      message: `Checked in for ${type}`,
+      attendeeType: 'FARMER' as const,
+      alreadyCheckedIn: false,
       data: {
         name: farmer.name,
         mobile: farmer.mobile,
@@ -125,84 +203,122 @@ export class UniversalCheckInService {
         block: farmer.block,
         district: farmer.district,
         category: farmer.category,
+        photoUrl: farmer.photoUrl,
+        hasCheckedIn,
         type,
         scannedBy,
-        scannedAt: new Date(),
+        scannedAt: checkIn.scannedAt,
       },
     };
   }
 
-  // ✅ UPDATE METHOD SIGNATURE
-  private async guestCheckIn(
-    guestPass: GuestPass,
-    type: CheckInType,
-    scannedBy: string,
-  ) {
+  private async guestCheckIn(guestPass: GuestPass, type: CheckInType, scannedBy: string) {
     // Check if already checked in
-    const existingCheckIn = await this.guestCheckInRepo.findOne({
+    const existing = await this.guestCheckInRepo.findOne({
       where: {
-        guestPass: { id: guestPass.id }, // ✅ FIXED: Use relation
+        guestPass: { id: guestPass.id },
         type,
       },
     });
 
-    if (existingCheckIn) {
+    if (existing) {
+      // Get all check-ins for status
+      const allCheckIns = await this.guestCheckInRepo.find({
+        where: { guestPass: { id: guestPass.id } },
+      });
+
+      const hasCheckedIn = {
+        entry: allCheckIns.some(c => c.type === 'entry'),
+        lunch: allCheckIns.some(c => c.type === 'lunch'),
+        dinner: allCheckIns.some(c => c.type === 'dinner'),
+        session: allCheckIns.some(c => c.type === 'session'),
+      };
+
       return {
         success: false,
-        message: 'Already checked in',
+        message: `Already checked in for ${type}`,
+        attendeeType: 'GUEST' as const,
         alreadyCheckedIn: true,
-        attendeeType: 'GUEST',
         data: {
           qrCode: guestPass.qrCode,
           category: guestPass.category,
-          name: guestPass.name || `${guestPass.category} Guest`,
-          mobile: guestPass.mobile || 'Not assigned',
+          sequenceNumber: guestPass.sequenceNumber,
           isAssigned: guestPass.isAssigned,
-          checkedInAt: existingCheckIn.scannedAt,
+          name: guestPass.name,
+          mobile: guestPass.mobile,
+          hasCheckedIn,
+          type,
+          scannedBy: existing.scannedBy,
+          checkedInAt: existing.checkedInAt,
         },
       };
     }
 
-    // ✅ FIXED: Create check-in with proper relation
-    const checkInRecord = this.guestCheckInRepo.create({
+    // Create new check-in
+    const checkIn = this.guestCheckInRepo.create({
       guestPass: guestPass,
       type,
       scannedBy,
     });
 
-    this.guestCheckInRepo
-      .save(checkInRecord)
-      .catch((err) => console.error('Async guest check-in save error:', err));
+    await this.guestCheckInRepo.save(checkIn);
 
-    // Update status flags immediately
-    const updateData: any = {};
-    if (type === 'entry') updateData.hasEntryCheckIn = true;
-    if (type === 'lunch') updateData.hasLunchCheckIn = true;
-    if (type === 'dinner') updateData.hasDinnerCheckIn = true;
-    if (type === 'session') updateData.hasSessionCheckIn = true;
+    // Update status flags asynchronously
+    this.updateGuestStatus(guestPass.id, type).catch(err =>
+      console.error('Failed to update guest status:', err)
+    );
 
-    if (Object.keys(updateData).length > 0) {
-      this.guestPassRepo
-        .update({ id: guestPass.id }, updateData)
-        .catch((err) =>
-          console.error('Async guest status update error:', err),
-        );
-    }
+    // Get updated check-ins
+    const allCheckIns = await this.guestCheckInRepo.find({
+      where: { guestPass: { id: guestPass.id } },
+    });
+
+    const hasCheckedIn = {
+      entry: allCheckIns.some(c => c.type === 'entry'),
+      lunch: allCheckIns.some(c => c.type === 'lunch'),
+      dinner: allCheckIns.some(c => c.type === 'dinner'),
+      session: allCheckIns.some(c => c.type === 'session'),
+    };
 
     return {
       success: true,
-      message: 'Check-in successful',
-      attendeeType: 'GUEST',
+      message: `Checked in for ${type}`,
+      attendeeType: 'GUEST' as const,
+      alreadyCheckedIn: false,
       data: {
         qrCode: guestPass.qrCode,
         category: guestPass.category,
-        name: guestPass.name || `${guestPass.category} Guest`,
-        mobile: guestPass.mobile || 'Not assigned',
+        sequenceNumber: guestPass.sequenceNumber,
         isAssigned: guestPass.isAssigned,
+        name: guestPass.name,
+        mobile: guestPass.mobile,
+        hasCheckedIn,
         type,
         scannedBy,
-        scannedAt: new Date(),
+        checkedInAt: checkIn.checkedInAt,
       },
     };
+  }
+
+  private async updateFarmerStatus(farmerId: string, type: CheckInType) {
+    const updateData: any = {};
+    
+    if (type === 'entry') updateData.hasCheckedInEntry = true;
+    if (type === 'lunch') updateData.hasCheckedInLunch = true;
+    if (type === 'dinner') updateData.hasCheckedInDinner = true;
+    if (type === 'session') updateData.hasCheckedInSession = true;
+
+    await this.registrationRepo.update(farmerId, updateData);
+  }
+
+  private async updateGuestStatus(guestPassId: string, type: CheckInType) {
+    const updateData: any = {};
+    
+    if (type === 'entry') updateData.hasCheckedInEntry = true;
+    if (type === 'lunch') updateData.hasCheckedInLunch = true;
+    if (type === 'dinner') updateData.hasCheckedInDinner = true;
+    if (type === 'session') updateData.hasCheckedInSession = true;
+
+    await this.guestPassRepo.update(guestPassId, updateData);
   }
 }
