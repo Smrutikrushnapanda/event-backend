@@ -1,16 +1,29 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsBoolean } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CheckInDto {
-  @IsNotEmpty()
+  @ApiProperty({ 
+    description: 'Type of check-in',
+    enum: ['entry', 'lunch', 'dinner', 'session'],
+    example: 'entry'
+  })
   @IsString()
-  @IsIn(['entry', 'lunch', 'dinner', 'session'])
-  type: 'entry' | 'lunch' | 'dinner' | 'session';
+  @IsEnum(['entry', 'lunch', 'dinner', 'session'])
+  type: string;
 
-  @IsOptional()
+  @ApiProperty({ 
+    description: 'ID of volunteer who performed the scan',
+    example: 'volunteer-uuid-123'
+  })
   @IsString()
-  scannedBy?: string;
+  scannedBy: string;
 
+  @ApiProperty({ 
+    description: 'Whether this check-in is for a person attending on behalf of the registered farmer',
+    required: false,
+    default: false
+  })
   @IsOptional()
   @IsBoolean()
-  wasDelegate?: boolean;
+  wasBehalf?: boolean;
 }

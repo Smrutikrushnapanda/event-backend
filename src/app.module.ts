@@ -7,7 +7,7 @@ import 'dotenv/config';
 import { VolunteersModule } from './volunteers/volunteers.module';
 import { AuthModule } from './auth/auth.module';
 import { GuestPassesModule } from './guest-passes/guest-passes.module';
-import { UniversalCheckInModule } from './common/universal-checkin.module';
+import { UniversalCheckinModule } from './common/universal-checkin.module';
 
 @Module({
   imports: [
@@ -35,7 +35,7 @@ import { UniversalCheckInModule } from './common/universal-checkin.module';
     VolunteersModule,
     AuthModule,
     GuestPassesModule,
-    UniversalCheckInModule
+    UniversalCheckinModule
   ],
   controllers: [AppController],
   providers: [AppService],

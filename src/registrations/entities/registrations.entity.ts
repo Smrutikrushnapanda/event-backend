@@ -1,78 +1,65 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
+import { 
+  Entity, 
+  PrimaryGeneratedColumn, 
+  Column, 
   CreateDateColumn,
   OneToMany,
-  Index,
+  Index 
 } from 'typeorm';
 import { CheckIn } from './checkin.entity';
 
 @Entity('event_registrations')
-@Index(['qrCode'], { unique: true })
-@Index(['mobile'], { unique: true })
-@Index(['aadhaarOrId'], { unique: true })
-@Index(['block'])
-@Index(['district'])
-@Index(['createdAt'])
 export class Registration {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true, length: 20 })
-  @Index('idx_qr_scan')
+  @Column({ type: 'varchar', unique: true })
+  @Index()
   qrCode: string;
 
-  @Column({ length: 100 })
+  @Column({ type: 'varchar', length: 100 })
   name: string;
 
-  @Column({ length: 100 })
+  @Column({ type: 'varchar', length: 100 })
   village: string;
 
-  @Column({ length: 50 })
+  @Column({ type: 'varchar', length: 100 })
   district: string;
 
-  @Column({ length: 50 })
+  @Column({ type: 'varchar', length: 100 })
+  @Index()
   block: string;
 
-  @Column({ length: 10, unique: true })
+  @Column({ unique: true, length: 15 })
   mobile: string;
 
-  @Column({ length: 12, unique: true })
+  @Column({ unique: true })
   aadhaarOrId: string;
 
-  @Column({ type: 'enum', enum: ['male', 'female', 'others'] })
+  @Column({ type: 'varchar', length: 10 })
   gender: 'male' | 'female' | 'others';
 
-  @Column({ type: 'enum', enum: ['general', 'obc', 'sc', 'st'] })
+  @Column({ type: 'varchar', length: 10 })
   caste: 'general' | 'obc' | 'sc' | 'st';
 
-  @Column({ length: 100 })
+  @Column()
   category: string;
 
+  // ✅ BEHALF FIELDS (Attending on behalf of registered farmer)
   @Column({ nullable: true, length: 100 })
-  delegateName?: string;
+  behalfName?: string;
 
-  @Column({ nullable: true, length: 10 })
-  delegateMobile?: string;
+  @Column({ nullable: true, length: 15 })
+  behalfMobile?: string;
 
-  @Column({ nullable: true, type: 'enum', enum: ['male', 'female', 'others'] })
-  delegateGender?: 'male' | 'female' | 'others';
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  behalfGender?: 'male' | 'female' | 'others';
 
+  @Column({ type: 'boolean', default: false })
+  isBehalfAttending: boolean;
+
+  // Check-in status flags
   @Column({ default: false })
-  @Index()
-  isDelegateAttending: boolean;
-
-  @OneToMany(() => CheckIn, (checkIn) => checkIn.registration, {
-    cascade: true,
-  })
-  checkIns: CheckIn[];
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @Column({ default: false })
-  @Index()
   hasEntryCheckIn: boolean;
 
   @Column({ default: false })
@@ -83,4 +70,10 @@ export class Registration {
 
   @Column({ default: false })
   hasSessionCheckIn: boolean;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @OneToMany(() => CheckIn, (checkIn) => checkIn.registration)
+  checkIns: CheckIn[];
 }

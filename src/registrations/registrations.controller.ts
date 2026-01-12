@@ -28,7 +28,7 @@ import { ExcelExportService } from './excel-export.service';
 import { QRCodePDFService } from './qrcode-pdf.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { CheckInDto } from './dto/checkin.dto';
-import { AddDelegateDto } from './dto/add-delegate.dto';
+import { AddBehalfDto } from './dto/add-behalf.dto';
 import { CheckIn } from './entities/checkin.entity';
 
 @ApiTags('Registrations')
@@ -253,17 +253,17 @@ export class RegistrationsController {
         gender: registration.gender,
         caste: registration.caste,
         category: registration.category,
-        delegateName: registration.delegateName,
-        delegateMobile: registration.delegateMobile,
-        delegateGender: registration.delegateGender,
-        isDelegateAttending: registration.isDelegateAttending,
+        behalfName: registration.behalfName,
+        behalfMobile: registration.behalfMobile,
+        behalfGender: registration.behalfGender,
+        isBehalfAttending: registration.isBehalfAttending,
         createdAt: registration.createdAt,
         hasCheckedIn,
         checkIns: checkIns.map(c => ({
           id: c.id,
           type: c.type,
           scannedAt: c.scannedAt,
-          wasDelegate: c.wasDelegate,
+          wasBehalf: c.wasBehalf,
         })),
       };
     } catch (error) {
@@ -327,7 +327,7 @@ export class RegistrationsController {
       type: body.type as 'entry' | 'lunch' | 'dinner' | 'session',
       registrationId: registration.id,
       scannedBy: body.scannedBy || 'System',
-      wasDelegate: body.wasDelegate || false,
+      wasBehalf: body.wasBehalf || false,
     });
 
     await this.checkInRepository.save(checkIn);
@@ -344,35 +344,35 @@ export class RegistrationsController {
   }
 
   @Post(':id/delegate')
-  @ApiOperation({ summary: 'Add delegate/relative to registration' })
+  @ApiOperation({ summary: 'Add behalf person to registration' })
   @ApiParam({ name: 'id', description: 'Registration UUID' })
-  @ApiBody({ type: AddDelegateDto })
-  @ApiResponse({ status: 200, description: 'Delegate added successfully' })
+  @ApiBody({ type: AddBehalfDto })
+  @ApiResponse({ status: 200, description: 'Behalf person added successfully' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
-  addDelegate(
+  addBehalf(
     @Param('id') id: string,
-    @Body() dto: AddDelegateDto,
+    @Body() dto: AddBehalfDto,
   ) {
-    return this.registrationsService.addDelegate(id, dto);
+    return this.registrationsService.addBehalf(id, dto);
   }
 
   @Patch(':id/delegate/toggle')
-  @ApiOperation({ summary: 'Toggle between original user and delegate attendance' })
+  @ApiOperation({ summary: 'Toggle between original farmer and behalf person attendance' })
   @ApiParam({ name: 'id', description: 'Registration UUID' })
   @ApiQuery({ 
-    name: 'isDelegateAttending', 
+    name: 'isBehalfAttending', 
     type: 'boolean', 
     example: true,
-    description: 'True if delegate is attending, false for original user' 
+    description: 'True if behalf person is attending, false for original farmer' 
   })
   @ApiResponse({ status: 200, description: 'Attendance toggled successfully' })
-  @ApiResponse({ status: 400, description: 'No delegate registered' })
+  @ApiResponse({ status: 400, description: 'No behalf person registered' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
-  toggleDelegate(
+  toggleBehalf(
     @Param('id') id: string,
-    @Query('isDelegateAttending') isDelegateAttending: string,
+    @Query('isBehalfAttending') isBehalfAttending: string,
   ) {
-    return this.registrationsService.toggleDelegate(id, isDelegateAttending === 'true');
+    return this.registrationsService.toggleBehalf(id, isBehalfAttending === 'true');
   }
 
   @Get(':id/checkins')
@@ -439,23 +439,24 @@ export class RegistrationsController {
   }
 
   @Post('fast-checkin/:qrCode')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ 
-    summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
-    description: 'Optimized endpoint for high-volume event scanning.',
-  })
-  @ApiResponse({ status: 200, description: 'Check-in processed' })
-  async fastCheckIn(
-    @Param('qrCode') qrCode: string,
-    @Body() body: CheckInDto,
-  ) {
-    return this.registrationsService.fastCheckIn(
-      qrCode,
-      body.type,
-      body.scannedBy,
-      body.wasDelegate,
-    );
-  }
+@HttpCode(HttpStatus.OK)
+@ApiOperation({ 
+  summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
+  description: 'Optimized endpoint for high-volume event scanning.',
+})
+@ApiResponse({ status: 200, description: 'Check-in processed' })
+async fastCheckIn(
+  @Param('qrCode') qrCode: string,
+  @Body() body: CheckInDto,
+) {
+  // ✅ FIX: Cast body.type to proper union type
+  return this.registrationsService.fastCheckIn(
+    qrCode,
+    body.type as 'entry' | 'lunch' | 'dinner' | 'session', // Add type assertion here
+    body.scannedBy,
+    body.wasBehalf,
+  );
+}
 
   @Post('bulk')
   @ApiOperation({ 

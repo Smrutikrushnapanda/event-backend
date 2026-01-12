@@ -9,7 +9,7 @@ import { Repository, In } from 'typeorm';
 import { Registration } from './entities/registrations.entity';
 import { CheckIn } from './entities/checkin.entity';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
-import { AddDelegateDto } from './dto/add-delegate.dto';
+import { AddBehalfDto } from './dto/add-behalf.dto';
 import { StatisticsResponseDto } from './dto/statistics-response.dto';
 import { RegistrationCacheService } from './registration-cache.service';
 
@@ -205,7 +205,7 @@ export class RegistrationsService {
         type: checkInType,
         registrationId: registration.id,
         scannedBy: scannedBy || 'Volunteer',
-        wasDelegate,
+        wasBehalf: wasDelegate,
       });
 
       this.checkInRepository.save(checkIn).catch(err => {
@@ -259,7 +259,7 @@ export class RegistrationsService {
       sessionCheckIns,
     ] = await Promise.all([
       this.registrationRepository.count(),
-      this.registrationRepository.count({ where: { isDelegateAttending: true } }),
+      this.registrationRepository.count({ where: { isBehalfAttending: true } }),
       this.checkInRepository.count({ where: { type: 'entry' } }),
       this.checkInRepository.count({ where: { type: 'lunch' } }),
       this.checkInRepository.count({ where: { type: 'dinner' } }),
@@ -348,20 +348,21 @@ export class RegistrationsService {
     return registration;
   }
 
-  async addDelegate(id: string, dto: AddDelegateDto): Promise<Registration> {
+  async addBehalf(id: string, dto: AddBehalfDto): Promise<Registration> {
     const registration = await this.findById(id);
-    registration.delegateName = dto.delegateName;
-    registration.delegateMobile = dto.delegateMobile;
-    registration.delegateGender = dto.delegateGender;
+    registration.behalfName = dto.behalfName;
+    registration.behalfMobile = dto.behalfMobile;
+    registration.behalfGender = dto.behalfGender;
+    registration.isBehalfAttending = true;
     return this.registrationRepository.save(registration);
   }
 
-  async toggleDelegate(id: string, isDelegateAttending: boolean): Promise<Registration> {
+  async toggleBehalf(id: string, isBehalfAttending: boolean): Promise<Registration> {
     const registration = await this.findById(id);
-    if (!registration.delegateName) {
-      throw new BadRequestException('No delegate registered for this user');
+    if (!registration.behalfName) {
+      throw new BadRequestException('No behalf person registered for this farmer');
     }
-    registration.isDelegateAttending = isDelegateAttending;
+    registration.isBehalfAttending = isBehalfAttending;
     return this.registrationRepository.save(registration);
   }
 
@@ -384,8 +385,10 @@ export class RegistrationsService {
         id: registration.id,
         name: registration.name,
         qrCode: registration.qrCode,
-        isDelegateAttending: registration.isDelegateAttending,
-        delegateName: registration.delegateName,
+        isBehalfAttending: registration.isBehalfAttending,
+        behalfName: registration.behalfName,
+        behalfMobile: registration.behalfMobile,
+        behalfGender: registration.behalfGender,
       },
       checkIns,
       summary,
