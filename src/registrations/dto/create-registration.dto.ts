@@ -22,11 +22,11 @@ export class CreateRegistrationDto {
   @Transform(({ value }) => value?.trim())
   village: string;
 
-  @ApiProperty({ example: 'Bhubaneswar GP', description: 'Gram Panchayat' })
+  @ApiPropertyOptional({ example: 'Bhubaneswar GP', description: 'Gram Panchayat' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'GP is required' })
   @Transform(({ value }) => value?.trim())
-  gp: string;
+  gp?: string;
 
   @ApiProperty({ example: 'Khordha', description: 'District name' })
   @IsString()

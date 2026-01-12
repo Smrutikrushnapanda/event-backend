@@ -13,7 +13,6 @@ import { GuestCheckIn } from './guest-checkin.entity';
 @Entity('guest_passes')
 @Index(['qrCode'], { unique: true })
 @Index(['category'])
-@Index(['isAssigned'])
 @Index(['createdAt'])
 export class GuestPass {
   @PrimaryGeneratedColumn('uuid')
