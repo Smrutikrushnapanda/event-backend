@@ -1,15 +1,14 @@
 import {
   IsNotEmpty,
-  IsOptional,
   IsString,
+  IsEnum,
   Length,
   Matches,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
 export class CreateRegistrationDto {
-
   @ApiProperty({ example: 'John Doe', description: 'Full name of the registrant' })
   @IsString()
   @IsNotEmpty({ message: 'Name is required' })
@@ -21,12 +20,6 @@ export class CreateRegistrationDto {
   @IsNotEmpty({ message: 'Village is required' })
   @Transform(({ value }) => value?.trim())
   village: string;
-
-  @ApiPropertyOptional({ example: 'Bhubaneswar GP', description: 'Gram Panchayat' })
-  @IsOptional()
-  @IsString()
-  @Transform(({ value }) => value?.trim())
-  gp?: string;
 
   @ApiProperty({ example: 'Khordha', description: 'District name' })
   @IsString()
@@ -52,12 +45,28 @@ export class CreateRegistrationDto {
   @Matches(/^\d{12}$/, { message: 'Aadhaar must contain only digits' })
   aadhaarOrId: string;
 
-  @ApiPropertyOptional({ example: '/uploads/photo-123.jpg', description: 'Photo URL' })
-  @IsOptional()
-  @IsString()
-  photoUrl?: string;
+  @ApiProperty({ 
+    example: 'male', 
+    description: 'Gender',
+    enum: ['male', 'female', 'others']
+  })
+  @IsEnum(['male', 'female', 'others'], { message: 'Gender must be male, female, or others' })
+  @IsNotEmpty({ message: 'Gender is required' })
+  gender: 'male' | 'female' | 'others';
 
-  @ApiProperty({ example: 'Fisheries & Animal Resources Development', description: 'Category or Department' })
+  @ApiProperty({ 
+    example: 'general', 
+    description: 'Caste category',
+    enum: ['general', 'obc', 'sc', 'st']
+  })
+  @IsEnum(['general', 'obc', 'sc', 'st'], { message: 'Caste must be general, obc, sc, or st' })
+  @IsNotEmpty({ message: 'Caste is required' })
+  caste: 'general' | 'obc' | 'sc' | 'st';
+
+  @ApiProperty({ 
+    example: 'Fisheries & Animal Resources Development', 
+    description: 'Category or Department' 
+  })
   @IsString()
   @IsNotEmpty({ message: 'Category is required' })
   category: string;

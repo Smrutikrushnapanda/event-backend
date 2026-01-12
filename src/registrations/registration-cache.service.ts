@@ -1,16 +1,14 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Registration } from './entities/registrations.entity';
 import Redis from 'ioredis';
+import { Registration } from './entities/registrations.entity';
 
 @Injectable()
 export class RegistrationCacheService implements OnModuleInit {
   private redis: Redis;
-  
-  private readonly CACHE_TTL = 60 * 60 * 24 * 7;
-  private readonly QR_KEY_PREFIX = 'qr:';
-  
+  private readonly TTL = 86400; // 24 hours
+
   constructor(
     @InjectRepository(Registration)
     private registrationRepository: Repository<Registration>,
@@ -18,157 +16,169 @@ export class RegistrationCacheService implements OnModuleInit {
     this.redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD,
       retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
+        if (times > 3) {
+          console.error('❌ Redis connection failed after 3 retries');
+          return null;
+        }
+        return Math.min(times * 100, 2000);
       },
-      maxRetriesPerRequest: 3,
+    });
+
+    this.redis.on('connect', () => {
+      console.log('✅ Redis cache service initialized');
+    });
+
+    this.redis.on('error', (err) => {
+      console.error('❌ Redis error:', err);
     });
   }
 
   async onModuleInit() {
-    console.log('✅ Redis cache service initialized');
+    // Optional: Pre-load cache on startup (can be slow with large datasets)
+    // await this.preloadAllRegistrations();
   }
 
-  async preloadAllRegistrations(): Promise<void> {
-    console.log('📦 Starting registration cache pre-load...');
-    
-    const startTime = Date.now();
-    const batchSize = 1000;
-    let page = 0;
-    let totalLoaded = 0;
-    
-    while (true) {
-      const registrations = await this.registrationRepository.find({
-        skip: page * batchSize,
-        take: batchSize,
-        relations: ['checkIns'],
-      });
-      
-      if (registrations.length === 0) break;
-      
-      const pipeline = this.redis.pipeline();
-      
-      for (const reg of registrations) {
-        const cacheData = {
-          id: reg.id,
-          qrCode: reg.qrCode,
-          name: reg.name,
-          village: reg.village,
-          block: reg.block,
-          district: reg.district,
-          mobile: reg.mobile,
-          category: reg.category,
-          photoUrl: reg.photoUrl,
-          delegateName: reg.delegateName,
-          isDelegateAttending: reg.isDelegateAttending,
-          hasEntryCheckIn: reg.checkIns.some(c => c.type === 'entry'),
-          hasLunchCheckIn: reg.checkIns.some(c => c.type === 'lunch'),
-          hasDinnerCheckIn: reg.checkIns.some(c => c.type === 'dinner'),
-          hasSessionCheckIn: reg.checkIns.some(c => c.type === 'session'),
-        };
-        
-        pipeline.setex(
-          `${this.QR_KEY_PREFIX}${reg.qrCode}`,
-          this.CACHE_TTL,
-          JSON.stringify(cacheData)
-        );
-      }
-      
-      await pipeline.exec();
-      totalLoaded += registrations.length;
-      console.log(`📦 Loaded ${totalLoaded} registrations into cache...`);
-      page++;
-    }
-    
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✅ Cache pre-load complete: ${totalLoaded} registrations in ${duration}s`);
-  }
-
-  async getByQrCode(qrCode: string): Promise<any | null> {
+  async getByQrCode(qrCode: string): Promise<any> {
     try {
-      const cached = await this.redis.get(`${this.QR_KEY_PREFIX}${qrCode}`);
+      const cached = await this.redis.get(`reg:${qrCode}`);
       
       if (cached) {
         return JSON.parse(cached);
       }
       
-      console.log(`⚠️ Cache miss for QR: ${qrCode}`);
       const registration = await this.registrationRepository.findOne({
         where: { qrCode },
-        relations: ['checkIns'],
       });
-      
-      if (!registration) return null;
-      
-      const cacheData = {
-        id: registration.id,
-        qrCode: registration.qrCode,
-        name: registration.name,
-        village: registration.village,
-        block: registration.block,
-        district: registration.district,
-        mobile: registration.mobile,
-        category: registration.category,
-        photoUrl: registration.photoUrl,
-        delegateName: registration.delegateName,
-        isDelegateAttending: registration.isDelegateAttending,
-        hasEntryCheckIn: registration.checkIns.some(c => c.type === 'entry'),
-        hasLunchCheckIn: registration.checkIns.some(c => c.type === 'lunch'),
-        hasDinnerCheckIn: registration.checkIns.some(c => c.type === 'dinner'),
-        hasSessionCheckIn: registration.checkIns.some(c => c.type === 'session'),
-      };
-      
-      await this.redis.setex(
-        `${this.QR_KEY_PREFIX}${qrCode}`,
-        this.CACHE_TTL,
-        JSON.stringify(cacheData)
-      );
-      
-      return cacheData;
+
+      if (registration) {
+        const cacheData = {
+          id: registration.id,
+          qrCode: registration.qrCode,
+          name: registration.name,
+          village: registration.village,
+          district: registration.district,
+          block: registration.block,
+          mobile: registration.mobile,
+          aadhaarOrId: registration.aadhaarOrId,
+          gender: registration.gender,
+          caste: registration.caste,
+          category: registration.category,
+          delegateName: registration.delegateName,
+          delegateMobile: registration.delegateMobile,
+          delegateGender: registration.delegateGender,
+          isDelegateAttending: registration.isDelegateAttending,
+          hasEntryCheckIn: registration.hasEntryCheckIn,
+          hasLunchCheckIn: registration.hasLunchCheckIn,
+          hasDinnerCheckIn: registration.hasDinnerCheckIn,
+          hasSessionCheckIn: registration.hasSessionCheckIn,
+        };
+
+        await this.redis.setex(
+          `reg:${qrCode}`,
+          this.TTL,
+          JSON.stringify(cacheData),
+        );
+
+        return cacheData;
+      }
+
+      return null;
     } catch (error) {
-      console.error('❌ Cache lookup error:', error);
-      return this.registrationRepository.findOne({
+      console.error('❌ Cache lookup failed:', error);
+      
+      const registration = await this.registrationRepository.findOne({
         where: { qrCode },
-        relations: ['checkIns'],
       });
+      
+      return registration;
     }
   }
 
-  async updateCheckInStatus(qrCode: string, checkInType: string): Promise<void> {
+  async updateCheckInStatus(
+    qrCode: string,
+    checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
+  ): Promise<void> {
     try {
-      const cached = await this.redis.get(`${this.QR_KEY_PREFIX}${qrCode}`);
+      const cached = await this.redis.get(`reg:${qrCode}`);
       
       if (cached) {
-        const data = JSON.parse(cached);
+        const registration = JSON.parse(cached);
         
-        if (checkInType === 'entry') data.hasEntryCheckIn = true;
-        if (checkInType === 'lunch') data.hasLunchCheckIn = true;
-        if (checkInType === 'dinner') data.hasDinnerCheckIn = true;
-        if (checkInType === 'session') data.hasSessionCheckIn = true;
-        
+        const statusMap = {
+          entry: 'hasEntryCheckIn',
+          lunch: 'hasLunchCheckIn',
+          dinner: 'hasDinnerCheckIn',
+          session: 'hasSessionCheckIn',
+        };
+
+        registration[statusMap[checkInType]] = true;
+
         await this.redis.setex(
-          `${this.QR_KEY_PREFIX}${qrCode}`,
-          this.CACHE_TTL,
-          JSON.stringify(data)
+          `reg:${qrCode}`,
+          this.TTL,
+          JSON.stringify(registration),
         );
       }
     } catch (error) {
-      console.error('❌ Cache update error:', error);
+      console.error('❌ Cache update failed:', error);
     }
   }
 
   async invalidateRegistration(qrCode: string): Promise<void> {
-    await this.redis.del(`${this.QR_KEY_PREFIX}${qrCode}`);
+    try {
+      await this.redis.del(`reg:${qrCode}`);
+    } catch (error) {
+      console.error('❌ Cache invalidation failed:', error);
+    }
   }
 
-  async clearAllCache(): Promise<void> {
-    const keys = await this.redis.keys(`${this.QR_KEY_PREFIX}*`);
-    if (keys.length > 0) {
-      await this.redis.del(...keys);
+  async preloadAllRegistrations(): Promise<void> {
+    console.log('🔄 Pre-loading all registrations into cache...');
+    
+    try {
+      const registrations = await this.registrationRepository.find();
+      
+      console.log(`📦 Found ${registrations.length} registrations to cache`);
+
+      const pipeline = this.redis.pipeline();
+
+      for (const registration of registrations) {
+        const cacheData = {
+          id: registration.id,
+          qrCode: registration.qrCode,
+          name: registration.name,
+          village: registration.village,
+          district: registration.district,
+          block: registration.block,
+          mobile: registration.mobile,
+          aadhaarOrId: registration.aadhaarOrId,
+          gender: registration.gender,
+          caste: registration.caste,
+          category: registration.category,
+          delegateName: registration.delegateName,
+          delegateMobile: registration.delegateMobile,
+          delegateGender: registration.delegateGender,
+          isDelegateAttending: registration.isDelegateAttending,
+          hasEntryCheckIn: registration.hasEntryCheckIn,
+          hasLunchCheckIn: registration.hasLunchCheckIn,
+          hasDinnerCheckIn: registration.hasDinnerCheckIn,
+          hasSessionCheckIn: registration.hasSessionCheckIn,
+        };
+
+        pipeline.setex(
+          `reg:${registration.qrCode}`,
+          this.TTL,
+          JSON.stringify(cacheData),
+        );
+      }
+
+      await pipeline.exec();
+      
+      console.log('✅ Cache pre-load complete');
+    } catch (error) {
+      console.error('❌ Cache pre-load failed:', error);
     }
-    console.log(`🗑️ Cleared ${keys.length} cached registrations`);
   }
 
   async isHealthy(): Promise<boolean> {

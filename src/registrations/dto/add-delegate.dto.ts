@@ -1,8 +1,8 @@
-import { IsString, IsNotEmpty, IsOptional, Length, Matches } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, IsEnum, Length, Matches } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class AddDelegateDto {
-  @ApiProperty({ example: 'Jane Doe', description: 'Delegate full name' })
+  @ApiProperty({ example: 'Jane Doe', description: 'Delegate name' })
   @IsString()
   @IsNotEmpty({ message: 'Delegate name is required' })
   delegateName: string;
@@ -14,8 +14,12 @@ export class AddDelegateDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   delegateMobile: string;
 
-  @ApiPropertyOptional({ example: '/uploads/delegate-123.jpg', description: 'Delegate photo URL' })
-  @IsOptional()
-  @IsString()
-  delegatePhotoUrl?: string;
+  @ApiProperty({ 
+    example: 'female', 
+    description: 'Delegate gender',
+    enum: ['male', 'female', 'others']
+  })
+  @IsEnum(['male', 'female', 'others'], { message: 'Gender must be male, female, or others' })
+  @IsNotEmpty({ message: 'Delegate gender is required' })
+  delegateGender: 'male' | 'female' | 'others';
 }

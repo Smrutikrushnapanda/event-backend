@@ -1,33 +1,33 @@
-import { Body, Controller, Param, Post } from '@nestjs/common';
+import { Controller, Post, Body, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { UniversalCheckInService } from './universal-checkin.service';
-import { IsIn, IsString } from 'class-validator';
 
-class UniversalCheckInDto {
-  @IsIn(['entry', 'lunch', 'dinner', 'session'])
+class CheckInDto {
   type: 'entry' | 'lunch' | 'dinner' | 'session';
-  
-  @IsString()
-  scannedBy: string;
+  scannedBy?: string;
+  wasDelegate?: boolean;
 }
 
+@ApiTags('Universal Check-in')
 @Controller('universal-checkin')
 export class UniversalCheckInController {
   constructor(private readonly service: UniversalCheckInService) {}
 
-  // ✅ FIXED: Changed to POST method
   @Post(':qrCode/lookup')
+  @ApiOperation({ summary: '🔍 Lookup attendee (Farmer or Guest) without check-in' })
+  @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0' })
+  @ApiResponse({ status: 200, description: 'Attendee found' })
+  @ApiResponse({ status: 404, description: 'QR Code not found' })
   async lookup(@Param('qrCode') qrCode: string) {
-    console.log('📋 Lookup request for QR:', qrCode);
-    return this.service.universalLookup(qrCode);
+    return this.service.lookupAttendee(qrCode);
   }
 
-  // ✅ Existing check-in endpoint
   @Post(':qrCode')
-  async checkIn(
-    @Param('qrCode') qrCode: string,
-    @Body() dto: UniversalCheckInDto,
-  ) {
-    console.log('✅ Check-in request for QR:', qrCode, 'Type:', dto.type);
-    return this.service.universalCheckIn(qrCode, dto.type, dto.scannedBy);
+  @ApiOperation({ summary: '✅ Universal check-in (works for both Farmers and Guests)' })
+  @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0' })
+  @ApiResponse({ status: 200, description: 'Check-in successful' })
+  @ApiResponse({ status: 404, description: 'QR Code not found' })
+  async checkIn(@Param('qrCode') qrCode: string, @Body() dto: CheckInDto) {
+    return this.service.checkInAttendee(qrCode, dto.type, dto.scannedBy, dto.wasDelegate);
   }
 }

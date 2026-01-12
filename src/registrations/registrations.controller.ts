@@ -6,28 +6,22 @@ import {
   Param, 
   Patch, 
   Query,
-  UseInterceptors,
-  UploadedFile,
   NotFoundException,
   BadRequestException,
   Res,
-    HttpCode,
+  HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { 
   ApiTags, 
   ApiOperation, 
   ApiResponse, 
-  ApiConsumes, 
   ApiBody,
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
 import type { Response } from 'express';
 import { RegistrationsService } from './registrations.service';
 import { ExcelExportService } from './excel-export.service';
@@ -50,58 +44,14 @@ export class RegistrationsController {
   ) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create new registration with optional photo upload' })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', example: 'John Doe' },
-        village: { type: 'string', example: 'Bhubaneswar' },
-        gp: { type: 'string', example: 'Bhubaneswar GP' },
-        district: { type: 'string', example: 'Khordha' },
-        block: { type: 'string', example: 'Bhubaneswar' },
-        mobile: { type: 'string', example: '9876543210' },
-        aadhaarOrId: { type: 'string', example: '123456789012' },
-        category: { type: 'string', example: 'General' },
-        photo: { type: 'string', format: 'binary', description: 'Optional photo (max 50MB)' },
-      },
-      required: ['name', 'village', 'gp', 'district', 'block', 'mobile', 'aadhaarOrId', 'category'],
-    },
-  })
+  @ApiOperation({ summary: 'Create new registration' })
+  @ApiBody({ type: CreateRegistrationDto })
   @ApiResponse({ status: 201, description: 'Registration created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request - validation failed' })
   @ApiResponse({ status: 409, description: 'Conflict - mobile/aadhaar already registered' })
-  @UseInterceptors(
-    FileInterceptor('photo', {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, callback) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-        },
-      }),
-      fileFilter: (req, file, callback) => {
-        if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
-          return callback(new Error('Only image files are allowed!'), false);
-        }
-        callback(null, true);
-      },
-      limits: {
-        fileSize: 50 * 1024 * 1024,
-      },
-    }),
-  )
-  create(
-    @Body() dto: CreateRegistrationDto,
-    @UploadedFile() photo: Express.Multer.File,
-  ) {
+  create(@Body() dto: CreateRegistrationDto) {
     console.log('Received DTO:', dto);
-    console.log('Has photo:', !!photo);
-    
-    const photoUrl = photo ? `/uploads/${photo.filename}` : undefined;
-    return this.registrationsService.create({ ...dto, photoUrl });
+    return this.registrationsService.create(dto);
   }
 
   @Get()
@@ -139,43 +89,7 @@ export class RegistrationsController {
     description: 'Include block-wise breakdown in response',
     example: false 
   })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns comprehensive event statistics',
-    schema: {
-      type: 'object',
-      properties: {
-        totalRegistrations: { type: 'number', example: 500 },
-        totalAttendees: { type: 'number', example: 450 },
-        totalDelegatesAttending: { type: 'number', example: 25 },
-        checkIns: {
-          type: 'object',
-          properties: {
-            entry: { type: 'number', example: 450 },
-            lunch: { type: 'number', example: 380 },
-            dinner: { type: 'number', example: 320 },
-            session: { type: 'number', example: 410 },
-            total: { type: 'number', example: 1560 },
-          },
-        },
-        blockWiseStats: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              block: { type: 'string', example: 'Bhubaneswar' },
-              totalRegistrations: { type: 'number', example: 150 },
-              entryCheckIns: { type: 'number', example: 120 },
-              lunchCheckIns: { type: 'number', example: 100 },
-              dinnerCheckIns: { type: 'number', example: 90 },
-              sessionCheckIns: { type: 'number', example: 110 },
-            },
-          },
-        },
-        generatedAt: { type: 'string', format: 'date-time' },
-      },
-    },
-  })
+  @ApiResponse({ status: 200, description: 'Returns comprehensive event statistics' })
   async getStatistics(@Query('includeBlockWise') includeBlockWise?: string) {
     const includeBlocks = includeBlockWise === 'true';
     return this.registrationsService.getStatistics(includeBlocks);
@@ -212,7 +126,7 @@ export class RegistrationsController {
   }
 
   @Get('export/csv')
-  @ApiOperation({ summary: 'Export all registrations to CSV (fast, no images)' })
+  @ApiOperation({ summary: 'Export all registrations to CSV' })
   @ApiResponse({ status: 200, description: 'CSV file generated successfully' })
   async exportToCSV(@Res() res: Response) {
     try {
@@ -293,10 +207,7 @@ export class RegistrationsController {
   @Get('qr/:qrCode')
   @ApiOperation({ summary: 'Get registration by QR code with check-in status' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns registration details with check-in history',
-  })
+  @ApiResponse({ status: 200, description: 'Returns registration details with check-in history' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
   async getByQr(@Param('qrCode') qrCode: string) {
     try {
@@ -335,16 +246,16 @@ export class RegistrationsController {
         qrCode: registration.qrCode,
         name: registration.name,
         village: registration.village,
-        gp: registration.gp,
         district: registration.district,
         block: registration.block,
         mobile: registration.mobile,
         aadhaarOrId: registration.aadhaarOrId,
-        photoUrl: registration.photoUrl,
+        gender: registration.gender,
+        caste: registration.caste,
         category: registration.category,
         delegateName: registration.delegateName,
         delegateMobile: registration.delegateMobile,
-        delegatePhotoUrl: registration.delegatePhotoUrl,
+        delegateGender: registration.delegateGender,
         isDelegateAttending: registration.isDelegateAttending,
         createdAt: registration.createdAt,
         hasCheckedIn,
@@ -382,21 +293,7 @@ export class RegistrationsController {
   @Post('checkin/:qrCode')
   @ApiOperation({ summary: 'Check-in for entry, lunch, dinner, or session' })
   @ApiParam({ name: 'qrCode', example: 'EVENT-ABC123XYZ0', description: 'Unique QR code' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        type: { 
-          type: 'string', 
-          enum: ['entry', 'lunch', 'dinner', 'session'],
-          example: 'entry',
-          description: 'Activity type: entry, lunch, dinner, or session'
-        },
-        scannedBy: { type: 'string', example: 'Volunteer', description: 'Optional: who scanned' },
-      },
-      required: ['type'],
-    },
-  })
+  @ApiBody({ type: CheckInDto })
   @ApiResponse({ status: 201, description: 'Check-in successful' })
   @ApiResponse({ status: 400, description: 'Already checked in for this activity' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
@@ -448,43 +345,15 @@ export class RegistrationsController {
 
   @Post(':id/delegate')
   @ApiOperation({ summary: 'Add delegate/relative to registration' })
-  @ApiConsumes('multipart/form-data')
   @ApiParam({ name: 'id', description: 'Registration UUID' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        delegateName: { type: 'string', example: 'Jane Doe' },
-        delegateMobile: { type: 'string', example: '9876543210' },
-        delegatePhoto: { type: 'string', format: 'binary', description: 'Optional delegate photo' },
-      },
-      required: ['delegateName', 'delegateMobile'],
-    },
-  })
+  @ApiBody({ type: AddDelegateDto })
   @ApiResponse({ status: 200, description: 'Delegate added successfully' })
   @ApiResponse({ status: 404, description: 'Registration not found' })
-  @UseInterceptors(
-    FileInterceptor('delegatePhoto', {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, callback) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          callback(null, `delegate-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: {
-        fileSize: 50 * 1024 * 1024,
-      },
-    }),
-  )
   addDelegate(
     @Param('id') id: string,
     @Body() dto: AddDelegateDto,
-    @UploadedFile() delegatePhoto: Express.Multer.File,
   ) {
-    const delegatePhotoUrl = delegatePhoto ? `/uploads/${delegatePhoto.filename}` : undefined;
-    return this.registrationsService.addDelegate(id, { ...dto, delegatePhotoUrl });
+    return this.registrationsService.addDelegate(id, dto);
   }
 
   @Patch(':id/delegate/toggle')
@@ -515,7 +384,7 @@ export class RegistrationsController {
     return this.registrationsService.getCheckIns(id);
   }
 
-   @Get('export/qr-pdf')
+  @Get('export/qr-pdf')
   @ApiOperation({ summary: 'Export all registrations as QR code labels PDF (10mm x 10mm)' })
   @ApiResponse({ status: 200, description: 'PDF with QR code labels generated successfully' })
   async exportQRCodePDF(@Res() res: Response) {
@@ -569,108 +438,57 @@ export class RegistrationsController {
     }
   }
 
-  @Post('export/qr-pdf/from-csv')
-  @ApiOperation({ summary: 'Upload CSV and generate QR code labels PDF' })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', format: 'binary', description: 'CSV file with QR codes, names, and blocks' },
-      },
-      required: ['file'],
-    },
+  @Post('fast-checkin/:qrCode')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ 
+    summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
+    description: 'Optimized endpoint for high-volume event scanning.',
   })
-  @ApiResponse({ status: 200, description: 'PDF generated from CSV' })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      fileFilter: (req, file, callback) => {
-        if (!file.originalname.match(/\.(csv)$/)) {
-          return callback(new Error('Only CSV files are allowed!'), false);
-        }
-        callback(null, true);
-      },
-    }),
-  )
-  async exportQRCodePDFFromCSV(
-    @UploadedFile() file: Express.Multer.File,
-    @Res() res: Response,
+  @ApiResponse({ status: 200, description: 'Check-in processed' })
+  async fastCheckIn(
+    @Param('qrCode') qrCode: string,
+    @Body() body: CheckInDto,
   ) {
-    try {
-      if (!file) {
-        throw new BadRequestException('CSV file is required');
-      }
-
-      console.log('📄 Generating QR PDF from uploaded CSV...');
-
-      const csvContent = file.buffer.toString('utf-8');
-      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDFFromCSV(csvContent);
-
-      const filename = `QR_Codes_From_CSV_${new Date().toISOString().split('T')[0]}.pdf`;
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Content-Length', pdfBuffer.length.toString());
-
-      res.send(pdfBuffer);
-      console.log('✅ QR code PDF from CSV sent successfully');
-    } catch (error) {
-      console.error('❌ CSV to QR PDF error:', error);
-      res.status(500).json({ error: 'Failed to generate QR code PDF from CSV' });
-    }
+    return this.registrationsService.fastCheckIn(
+      qrCode,
+      body.type,
+      body.scannedBy,
+      body.wasDelegate,
+    );
   }
 
-  @Post('fast-checkin/:qrCode')
-@HttpCode(HttpStatus.OK)
-@ApiOperation({ 
-  summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
-  description: 'Optimized endpoint for high-volume event scanning.',
-})
-@ApiResponse({ status: 200, description: 'Check-in processed' })
-async fastCheckIn(
-  @Param('qrCode') qrCode: string,
-  @Body() body: CheckInDto,
-) {
-  return this.registrationsService.fastCheckIn(
-    qrCode,
-    body.type,
-    body.scannedBy,
-    body.wasDelegate,
-  );
-}
+  @Post('bulk')
+  @ApiOperation({ 
+    summary: 'Bulk registration upload',
+    description: 'Upload multiple registrations at once.',
+  })
+  @ApiResponse({ status: 201, description: 'Bulk upload completed' })
+  async bulkCreate(@Body() dto: { registrations: CreateRegistrationDto[] }) {
+    return this.registrationsService.createBulk(dto.registrations);
+  }
 
-@Post('bulk')
-@ApiOperation({ 
-  summary: 'Bulk registration upload',
-  description: 'Upload multiple registrations at once.',
-})
-@ApiResponse({ status: 201, description: 'Bulk upload completed' })
-async bulkCreate(@Body() dto: { registrations: any[] }) {
-  return this.registrationsService.createBulk(dto.registrations);
-}
+  @Post('admin/preload-cache')
+  @ApiOperation({ 
+    summary: '🔄 Pre-load all registrations into cache',
+    description: 'Call this 1 hour before event.',
+  })
+  @ApiResponse({ status: 200, description: 'Cache pre-loaded' })
+  async preloadCache() {
+    await this.registrationsService.preloadCache();
+    return {
+      message: 'Cache pre-load started. This may take 2-3 minutes for 20k registrations.',
+      timestamp: new Date(),
+    };
+  }
 
-@Post('admin/preload-cache')
-@ApiOperation({ 
-  summary: '🔄 Pre-load all registrations into cache',
-  description: 'Call this 1 hour before event.',
-})
-@ApiResponse({ status: 200, description: 'Cache pre-loaded' })
-async preloadCache() {
-  await this.registrationsService.preloadCache();
-  return {
-    message: 'Cache pre-load started. This may take 2-3 minutes for 20k registrations.',
-    timestamp: new Date(),
-  };
-}
-
-@Get('admin/health')
-@ApiOperation({ summary: '💚 System health check' })
-@ApiResponse({ status: 200 })
-async healthCheck() {
-  const health = await this.registrationsService.healthCheck();
-  return {
-    ...health,
-    timestamp: new Date(),
-  };
-}
+  @Get('admin/health')
+  @ApiOperation({ summary: '💚 System health check' })
+  @ApiResponse({ status: 200 })
+  async healthCheck() {
+    const health = await this.registrationsService.healthCheck();
+    return {
+      ...health,
+      timestamp: new Date(),
+    };
+  }
 }

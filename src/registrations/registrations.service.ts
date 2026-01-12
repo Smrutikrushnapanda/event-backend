@@ -41,7 +41,15 @@ export class RegistrationsService {
     const qrCode = this.generateQRCode();
 
     const registration = this.registrationRepository.create({
-      ...dto,
+      name: dto.name,
+      village: dto.village,
+      district: dto.district,
+      block: dto.block,
+      mobile: dto.mobile,
+      aadhaarOrId: dto.aadhaarOrId,
+      gender: dto.gender,
+      caste: dto.caste,
+      category: dto.category,
       qrCode,
     });
 
@@ -55,83 +63,90 @@ export class RegistrationsService {
   }
 
   async createBulk(dtos: CreateRegistrationDto[]): Promise<{ 
-  success: number; 
-  failed: number; 
-  errors: Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }> 
-}> {
-  const results = {
-    success: 0,
-    failed: 0,
-    errors: [] as Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }>,
-  };
+    success: number; 
+    failed: number; 
+    errors: Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }> 
+  }> {
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [] as Array<{ mobile?: string; aadhaarOrId?: string; chunk?: number; error: string }>,
+    };
 
-  const chunkSize = 100;
-  
-  for (let i = 0; i < dtos.length; i += chunkSize) {
-    const chunk = dtos.slice(i, i + chunkSize);
+    const chunkSize = 100;
     
-    const mobiles = chunk.map(d => d.mobile);
-    const aadhaarIds = chunk.map(d => d.aadhaarOrId);
-    
-    const existingRecords = await this.registrationRepository.find({
-      where: [
-        { mobile: In(mobiles) },
-        { aadhaarOrId: In(aadhaarIds) },
-      ],
-      select: ['mobile', 'aadhaarOrId'],
-    });
-    
-    const existingMobiles = new Set(existingRecords.map(r => r.mobile));
-    const existingAadhaar = new Set(existingRecords.map(r => r.aadhaarOrId));
-    
-    // ✅ FIX: Explicitly type the array
-    const validRegistrations: Array<Partial<Registration> & { qrCode: string }> = [];
-    
-    for (const dto of chunk) {
-      if (existingMobiles.has(dto.mobile)) {
-        results.failed++;
-        results.errors.push({
-          mobile: dto.mobile,
-          error: 'Mobile already registered',
-        });
-        continue;
-      }
+    for (let i = 0; i < dtos.length; i += chunkSize) {
+      const chunk = dtos.slice(i, i + chunkSize);
       
-      if (existingAadhaar.has(dto.aadhaarOrId)) {
-        results.failed++;
-        results.errors.push({
-          aadhaarOrId: dto.aadhaarOrId,
-          error: 'Aadhaar already registered',
-        });
-        continue;
-      }
+      const mobiles = chunk.map(d => d.mobile);
+      const aadhaarIds = chunk.map(d => d.aadhaarOrId);
       
-      validRegistrations.push({
-        ...dto,
-        qrCode: this.generateQRCode(),
+      const existingRecords = await this.registrationRepository.find({
+        where: [
+          { mobile: In(mobiles) },
+          { aadhaarOrId: In(aadhaarIds) },
+        ],
+        select: ['mobile', 'aadhaarOrId'],
       });
       
-      existingMobiles.add(dto.mobile);
-      existingAadhaar.add(dto.aadhaarOrId);
-    }
-    
-    if (validRegistrations.length > 0) {
-      try {
-        await this.registrationRepository.insert(validRegistrations);
-        results.success += validRegistrations.length;
-      } catch (error) {
-        console.error('Bulk insert error:', error);
-        results.failed += validRegistrations.length;
-        results.errors.push({
-          chunk: i,
-          error: error.message,
+      const existingMobiles = new Set(existingRecords.map(r => r.mobile));
+      const existingAadhaar = new Set(existingRecords.map(r => r.aadhaarOrId));
+      
+      const validRegistrations: Array<Partial<Registration> & { qrCode: string }> = [];
+      
+      for (const dto of chunk) {
+        if (existingMobiles.has(dto.mobile)) {
+          results.failed++;
+          results.errors.push({
+            mobile: dto.mobile,
+            error: 'Mobile already registered',
+          });
+          continue;
+        }
+        
+        if (existingAadhaar.has(dto.aadhaarOrId)) {
+          results.failed++;
+          results.errors.push({
+            aadhaarOrId: dto.aadhaarOrId,
+            error: 'Aadhaar already registered',
+          });
+          continue;
+        }
+        
+        validRegistrations.push({
+          name: dto.name,
+          village: dto.village,
+          district: dto.district,
+          block: dto.block,
+          mobile: dto.mobile,
+          aadhaarOrId: dto.aadhaarOrId,
+          gender: dto.gender,
+          caste: dto.caste,
+          category: dto.category,
+          qrCode: this.generateQRCode(),
         });
+        
+        existingMobiles.add(dto.mobile);
+        existingAadhaar.add(dto.aadhaarOrId);
+      }
+      
+      if (validRegistrations.length > 0) {
+        try {
+          await this.registrationRepository.insert(validRegistrations);
+          results.success += validRegistrations.length;
+        } catch (error) {
+          console.error('Bulk insert error:', error);
+          results.failed += validRegistrations.length;
+          results.errors.push({
+            chunk: i,
+            error: error.message,
+          });
+        }
       }
     }
-  }
 
-  return results;
-}
+    return results;
+  }
 
   async findByQrCode(qrCode: string): Promise<Registration | null> {
     try {
@@ -337,7 +352,7 @@ export class RegistrationsService {
     const registration = await this.findById(id);
     registration.delegateName = dto.delegateName;
     registration.delegateMobile = dto.delegateMobile;
-    registration.delegatePhotoUrl = dto.delegatePhotoUrl;
+    registration.delegateGender = dto.delegateGender;
     return this.registrationRepository.save(registration);
   }
 

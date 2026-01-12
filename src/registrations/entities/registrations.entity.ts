@@ -29,9 +29,6 @@ export class Registration {
   @Column({ length: 100 })
   village: string;
 
-  @Column({ length: 100 })
-  gp: string;
-
   @Column({ length: 50 })
   district: string;
 
@@ -44,8 +41,11 @@ export class Registration {
   @Column({ length: 12, unique: true })
   aadhaarOrId: string;
 
-  @Column({ nullable: true, length: 255 })
-  photoUrl?: string;
+  @Column({ type: 'enum', enum: ['male', 'female', 'others'] })
+  gender: 'male' | 'female' | 'others';
+
+  @Column({ type: 'enum', enum: ['general', 'obc', 'sc', 'st'] })
+  caste: 'general' | 'obc' | 'sc' | 'st';
 
   @Column({ length: 100 })
   category: string;
@@ -56,8 +56,8 @@ export class Registration {
   @Column({ nullable: true, length: 10 })
   delegateMobile?: string;
 
-  @Column({ nullable: true, length: 255 })
-  delegatePhotoUrl?: string;
+  @Column({ nullable: true, type: 'enum', enum: ['male', 'female', 'others'] })
+  delegateGender?: 'male' | 'female' | 'others';
 
   @Column({ default: false })
   @Index()
