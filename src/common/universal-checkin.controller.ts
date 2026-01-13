@@ -10,6 +10,12 @@ import {
 import { ApiTags, ApiOperation, ApiParam, ApiBody } from '@nestjs/swagger';
 import { RegistrationsService } from '../registrations/registrations.service';
 import { GuestPassesService } from '../guest-passes/guest-passes.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Registration } from '../registrations/entities/registrations.entity';
+import { CheckIn } from '../registrations/entities/checkin.entity';
+import { GuestPass } from '../guest-passes/entities/guest-pass.entity';
+import { GuestCheckIn } from '../guest-passes/entities/guest-checkin.entity';
 
 interface CheckInDto {
   type: 'entry' | 'lunch' | 'dinner' | 'session';
@@ -25,6 +31,14 @@ export class UniversalCheckinController {
   constructor(
     private readonly registrationsService: RegistrationsService,
     private readonly guestPassesService: GuestPassesService,
+    @InjectRepository(Registration)
+    private registrationRepository: Repository<Registration>,
+    @InjectRepository(CheckIn)
+    private checkInRepository: Repository<CheckIn>,
+    @InjectRepository(GuestPass)
+    private guestPassRepository: Repository<GuestPass>,
+    @InjectRepository(GuestCheckIn)
+    private guestCheckInRepository: Repository<GuestCheckIn>,
   ) {}
 
   // ✅ LOOKUP ONLY - Does NOT create check-in record
@@ -113,7 +127,7 @@ export class UniversalCheckinController {
     throw new NotFoundException('QR code not found in system');
   }
 
-  // ✅ CHECK-IN - Creates check-in record
+  // ✅ CHECK-IN - Creates check-in record DIRECTLY (no cache dependency)
   @Post(':qrCode')
   @ApiOperation({ 
     summary: 'Universal check-in',
@@ -197,22 +211,26 @@ export class UniversalCheckinController {
           };
         }
 
-        // ✅ Use fastCheckIn with ACTUAL parameter name: wasDelegate
-        const result = await this.registrationsService.fastCheckIn(
-          qrCode,
-          checkInDto.type,
-          checkInDto.scannedBy,
-          checkInDto.wasBehalf || false, // Pass as wasDelegate parameter
-        );
+        // ✅ Create check-in record DIRECTLY
+        const checkIn = this.checkInRepository.create({
+          type: checkInDto.type,
+          registrationId: farmer.id,
+          scannedBy: checkInDto.scannedBy,
+          wasBehalf: checkInDto.wasBehalf || false,
+          scannedAt: new Date(),
+        });
 
-        if (!result.success) {
-          return {
-            success: false,
-            message: result.message,
-            type: 'farmer',
-            attendeeType: 'FARMER',
-          };
-        }
+        await this.checkInRepository.save(checkIn);
+        this.logger.log(`✅ CheckIn record created for farmer ${farmer.id}`);
+
+        // ✅ Update farmer flags DIRECTLY
+        if (checkInDto.type === 'entry') farmer.hasEntryCheckIn = true;
+        if (checkInDto.type === 'lunch') farmer.hasLunchCheckIn = true;
+        if (checkInDto.type === 'dinner') farmer.hasDinnerCheckIn = true;
+        if (checkInDto.type === 'session') farmer.hasSessionCheckIn = true;
+
+        await this.registrationRepository.save(farmer);
+        this.logger.log(`✅ Farmer flags updated`);
 
         // Get updated farmer data
         const updatedFarmer = await this.registrationsService.findByQrCode(qrCode);
@@ -249,7 +267,7 @@ export class UniversalCheckinController {
         };
       }
     } catch (farmerError) {
-      this.logger.warn(`❌ Farmer not found: ${qrCode}`);
+      this.logger.error(`❌ Farmer check-in error:`, farmerError);
       // Continue to try guest
     }
 
@@ -291,21 +309,25 @@ export class UniversalCheckinController {
         };
       }
 
-      // Use fastCheckIn for guest
-      const result = await this.guestPassesService.fastCheckIn(
-        qrCode,
-        checkInDto.type,
-        checkInDto.scannedBy,
-      );
+      // ✅ Create guest check-in record DIRECTLY
+      const guestCheckIn = this.guestCheckInRepository.create({
+        type: checkInDto.type,
+        guestPassId: guest.id,
+        scannedBy: checkInDto.scannedBy,
+        scannedAt: new Date(),
+      });
 
-      if (!result.success) {
-        return {
-          success: false,
-          message: result.message,
-          type: 'guest',
-          attendeeType: 'GUEST',
-        };
-      }
+      await this.guestCheckInRepository.save(guestCheckIn);
+      this.logger.log(`✅ GuestCheckIn record created for guest ${guest.id}`);
+
+      // ✅ Update guest flags DIRECTLY
+      if (checkInDto.type === 'entry') guest.hasEntryCheckIn = true;
+      if (checkInDto.type === 'lunch') guest.hasLunchCheckIn = true;
+      if (checkInDto.type === 'dinner') guest.hasDinnerCheckIn = true;
+      if (checkInDto.type === 'session') guest.hasSessionCheckIn = true;
+
+      await this.guestPassRepository.save(guest);
+      this.logger.log(`✅ Guest flags updated`);
 
       // Get updated guest data
       const updatedGuest = await this.guestPassesService.getByQrCode(qrCode);
@@ -332,7 +354,7 @@ export class UniversalCheckinController {
         },
       };
     } catch (guestError) {
-      this.logger.warn(`❌ Guest not found: ${qrCode}`);
+      this.logger.error(`❌ Guest check-in error:`, guestError);
     }
 
     // Neither found
