@@ -159,18 +159,18 @@ export class UniversalCheckinController {
         behalfName: {
           type: 'string',
           description: 'Name of behalf person (required if wasBehalf is true)',
-          required: false
+          default: false
         },
         behalfMobile: {
           type: 'string',
           description: 'Mobile of behalf person (required if wasBehalf is true)',
-          required: false
+          default: false
         },
         behalfGender: {
           type: 'string',
           enum: ['male', 'female', 'others'],
           description: 'Gender of behalf person (required if wasBehalf is true)',
-          required: false
+          default: 'male'
         }
       },
       required: ['type', 'scannedBy']
