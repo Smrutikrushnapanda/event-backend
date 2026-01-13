@@ -1,3 +1,4 @@
+// src/registrations/registration-cache.service.ts
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -8,16 +9,17 @@ import Redis from 'ioredis';
 export class RegistrationCacheService implements OnModuleInit {
   private redis: Redis;
   private readonly CACHE_PREFIX = 'reg:';
-  private readonly CACHE_TTL = 86400; // 24 hours
+  private readonly CACHE_TTL = 3600 * 24; // 24 hours
 
   constructor(
     @InjectRepository(Registration)
     private registrationRepository: Repository<Registration>,
   ) {
+    // Initialize Redis client
     this.redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD,
+      password: process.env.REDIS_PASSWORD || undefined,
       retryStrategy: (times) => {
         const delay = Math.min(times * 50, 2000);
         return delay;
@@ -30,191 +32,242 @@ export class RegistrationCacheService implements OnModuleInit {
     });
 
     this.redis.on('connect', () => {
-      console.log('✅ Redis cache service initialized');
+      console.log('✅ Redis connected successfully');
     });
   }
 
   async onModuleInit() {
+    console.log('🚀 Initializing registration cache...');
     await this.preloadAllRegistrations();
   }
 
-  async preloadAllRegistrations(): Promise<void> {
-    try {
-      console.log('🔄 Preloading registrations into cache...');
-      
-      const registrations = await this.registrationRepository.find({
-        select: [
-          'id',
-          'qrCode',
-          'name',
-          'village',
-          'district',
-          'block',
-          'mobile',
-          'aadhaarOrId',
-          'gender',
-          'caste',
-          'category',
-          'behalfName',
-          'behalfMobile',
-          'behalfGender',
-          'isBehalfAttending',
-          'hasEntryCheckIn',
-          'hasLunchCheckIn',
-          'hasDinnerCheckIn',
-          'hasSessionCheckIn',
-          'createdAt',
-        ],
-      });
-
-      const pipeline = this.redis.pipeline();
-      
-      for (const reg of registrations) {
-        const key = this.getCacheKey(reg.qrCode);
-        const data = {
-          id: reg.id,
-          qrCode: reg.qrCode,
-          name: reg.name,
-          village: reg.village,
-          district: reg.district,
-          block: reg.block,
-          mobile: reg.mobile,
-          aadhaarOrId: reg.aadhaarOrId,
-          gender: reg.gender,
-          caste: reg.caste,
-          category: reg.category,
-          behalfName: reg.behalfName,
-          behalfMobile: reg.behalfMobile,
-          behalfGender: reg.behalfGender,
-          isBehalfAttending: reg.isBehalfAttending,
-          hasEntryCheckIn: reg.hasEntryCheckIn,
-          hasLunchCheckIn: reg.hasLunchCheckIn,
-          hasDinnerCheckIn: reg.hasDinnerCheckIn,
-          hasSessionCheckIn: reg.hasSessionCheckIn,
-          createdAt: reg.createdAt,
-        };
-        
-        pipeline.set(key, JSON.stringify(data), 'EX', this.CACHE_TTL);
-      }
-
-      await pipeline.exec();
-      
-      console.log(`✅ Preloaded ${registrations.length} registrations into cache`);
-    } catch (error) {
-      console.error('❌ Failed to preload registrations:', error);
-    }
-  }
-
+  /**
+   * Get registration by QR code from cache
+   */
   async getByQrCode(qrCode: string): Promise<any | null> {
     try {
-      const key = this.getCacheKey(qrCode);
-      const cached = await this.redis.get(key);
-      
+      const cacheKey = `${this.CACHE_PREFIX}${qrCode}`;
+      const cached = await this.redis.get(cacheKey);
+
       if (cached) {
+        console.log('✅ Cache hit for QR:', qrCode);
         return JSON.parse(cached);
       }
+
+      console.log('⚠️ Cache miss for QR:', qrCode);
       
+      // Fetch from database and cache it
       const registration = await this.registrationRepository.findOne({
         where: { qrCode },
-        select: [
-          'id',
-          'qrCode',
-          'name',
-          'village',
-          'district',
-          'block',
-          'mobile',
-          'aadhaarOrId',
-          'gender',
-          'caste',
-          'category',
-          'behalfName',
-          'behalfMobile',
-          'behalfGender',
-          'isBehalfAttending',
-          'hasEntryCheckIn',
-          'hasLunchCheckIn',
-          'hasDinnerCheckIn',
-          'hasSessionCheckIn',
-          'createdAt',
-        ],
+        relations: ['checkIns'],
       });
 
       if (registration) {
-        const data = {
-          id: registration.id,
-          qrCode: registration.qrCode,
-          name: registration.name,
-          village: registration.village,
-          district: registration.district,
-          block: registration.block,
-          mobile: registration.mobile,
-          aadhaarOrId: registration.aadhaarOrId,
-          gender: registration.gender,
-          caste: registration.caste,
-          category: registration.category,
-          behalfName: registration.behalfName,
-          behalfMobile: registration.behalfMobile,
-          behalfGender: registration.behalfGender,
-          isBehalfAttending: registration.isBehalfAttending,
-          hasEntryCheckIn: registration.hasEntryCheckIn,
-          hasLunchCheckIn: registration.hasLunchCheckIn,
-          hasDinnerCheckIn: registration.hasDinnerCheckIn,
-          hasSessionCheckIn: registration.hasSessionCheckIn,
-          createdAt: registration.createdAt,
-        };
-        
-        await this.redis.set(key, JSON.stringify(data), 'EX', this.CACHE_TTL);
-        
-        return data;
+        await this.cacheRegistration(registration);
+        return this.transformRegistration(registration);
       }
-      
+
       return null;
     } catch (error) {
-      console.error('❌ Cache lookup error:', error);
+      console.error('❌ Cache get error:', error);
       return null;
     }
   }
 
+  /**
+   * Cache a single registration
+   */
+  async cacheRegistration(registration: Registration): Promise<void> {
+    try {
+      const cacheKey = `${this.CACHE_PREFIX}${registration.qrCode}`;
+      const transformed = this.transformRegistration(registration);
+      
+      await this.redis.setex(
+        cacheKey,
+        this.CACHE_TTL,
+        JSON.stringify(transformed)
+      );
+
+      console.log('✅ Cached registration:', registration.qrCode);
+    } catch (error) {
+      console.error('❌ Cache set error:', error);
+    }
+  }
+
+  /**
+   * Update check-in status in cache
+   */
   async updateCheckInStatus(
     qrCode: string,
-    checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
+    checkInType: 'entry' | 'lunch' | 'dinner' | 'session'
   ): Promise<void> {
     try {
-      const key = this.getCacheKey(qrCode);
-      const cached = await this.redis.get(key);
+      const cached = await this.getByQrCode(qrCode);
       
       if (cached) {
-        const data = JSON.parse(cached);
-        const statusField = `has${checkInType.charAt(0).toUpperCase() + checkInType.slice(1)}CheckIn`;
-        data[statusField] = true;
-        
-        await this.redis.set(key, JSON.stringify(data), 'EX', this.CACHE_TTL);
+        const checkInStatusMap = {
+          entry: 'hasEntryCheckIn',
+          lunch: 'hasLunchCheckIn',
+          dinner: 'hasDinnerCheckIn',
+          session: 'hasSessionCheckIn',
+        };
+
+        cached[checkInStatusMap[checkInType]] = true;
+
+        const cacheKey = `${this.CACHE_PREFIX}${qrCode}`;
+        await this.redis.setex(
+          cacheKey,
+          this.CACHE_TTL,
+          JSON.stringify(cached)
+        );
+
+        console.log(`✅ Updated ${checkInType} status for:`, qrCode);
       }
     } catch (error) {
-      console.error('❌ Failed to update check-in status in cache:', error);
+      console.error('❌ Cache update error:', error);
     }
   }
 
+  /**
+   * Invalidate (delete) registration from cache
+   */
   async invalidateRegistration(qrCode: string): Promise<void> {
     try {
-      const key = this.getCacheKey(qrCode);
-      await this.redis.del(key);
+      const cacheKey = `${this.CACHE_PREFIX}${qrCode}`;
+      await this.redis.del(cacheKey);
+      console.log('✅ Invalidated cache for:', qrCode);
     } catch (error) {
-      console.error('❌ Failed to invalidate cache:', error);
+      console.error('❌ Cache invalidation error:', error);
     }
   }
 
+  /**
+   * Preload all registrations into cache
+   */
+  async preloadAllRegistrations(): Promise<void> {
+    try {
+      console.log('🔄 Preloading all registrations into cache...');
+      
+      const registrations = await this.registrationRepository.find({
+        relations: ['checkIns'],
+      });
+
+      console.log(`📦 Found ${registrations.length} registrations to cache`);
+
+      // Batch cache operations
+      const pipeline = this.redis.pipeline();
+
+      for (const registration of registrations) {
+        const cacheKey = `${this.CACHE_PREFIX}${registration.qrCode}`;
+        const transformed = this.transformRegistration(registration);
+        
+        pipeline.setex(
+          cacheKey,
+          this.CACHE_TTL,
+          JSON.stringify(transformed)
+        );
+      }
+
+      await pipeline.exec();
+
+      console.log('✅ Cache preload complete');
+    } catch (error) {
+      console.error('❌ Cache preload error:', error);
+    }
+  }
+
+  /**
+   * Clear all cached registrations
+   */
+  async clearCache(): Promise<void> {
+    try {
+      const keys = await this.redis.keys(`${this.CACHE_PREFIX}*`);
+      
+      if (keys.length > 0) {
+        await this.redis.del(...keys);
+        console.log(`✅ Cleared ${keys.length} cached registrations`);
+      }
+    } catch (error) {
+      console.error('❌ Cache clear error:', error);
+    }
+  }
+
+  /**
+   * Check if Redis is healthy
+   */
   async isHealthy(): Promise<boolean> {
     try {
       await this.redis.ping();
       return true;
-    } catch {
+    } catch (error) {
+      console.error('❌ Redis health check failed:', error);
       return false;
     }
   }
 
-  private getCacheKey(qrCode: string): string {
-    return `${this.CACHE_PREFIX}${qrCode}`;
+  /**
+   * Transform registration entity to cache-friendly format
+   */
+  private transformRegistration(registration: Registration): any {
+    const checkInTypes = ['entry', 'lunch', 'dinner', 'session'] as const;
+    
+    const hasCheckedIn: Record<string, boolean> = {};
+    
+    for (const type of checkInTypes) {
+      hasCheckedIn[`has${type.charAt(0).toUpperCase() + type.slice(1)}CheckIn`] = 
+        registration.checkIns?.some(c => c.type === type) || false;
+    }
+
+    return {
+      id: registration.id,
+      name: registration.name,
+      mobile: registration.mobile,
+      village: registration.village,
+      district: registration.district,
+      block: registration.block,
+      category: registration.category,
+      gender: registration.gender,
+      caste: registration.caste,
+      qrCode: registration.qrCode,
+      behalfName: registration.behalfName,
+      behalfMobile: registration.behalfMobile,
+      behalfGender: registration.behalfGender,
+      isBehalfAttending: registration.isBehalfAttending,
+      ...hasCheckedIn,
+    };
+  }
+
+  /**
+   * Get cache statistics
+   */
+  async getCacheStats(): Promise<{
+    totalKeys: number;
+    memoryUsed: string;
+    hits: number;
+    misses: number;
+  }> {
+    try {
+      const keys = await this.redis.keys(`${this.CACHE_PREFIX}*`);
+      const info = await this.redis.info('stats');
+      
+      const hitsMatch = info.match(/keyspace_hits:(\d+)/);
+      const missesMatch = info.match(/keyspace_misses:(\d+)/);
+      const memoryMatch = info.match(/used_memory_human:(.+)/);
+
+      return {
+        totalKeys: keys.length,
+        memoryUsed: memoryMatch ? memoryMatch[1] : 'N/A',
+        hits: hitsMatch ? parseInt(hitsMatch[1]) : 0,
+        misses: missesMatch ? parseInt(missesMatch[1]) : 0,
+      };
+    } catch (error) {
+      console.error('❌ Cache stats error:', error);
+      return {
+        totalKeys: 0,
+        memoryUsed: 'N/A',
+        hits: 0,
+        misses: 0,
+      };
+    }
   }
 }
