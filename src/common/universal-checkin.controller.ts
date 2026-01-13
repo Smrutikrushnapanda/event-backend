@@ -21,6 +21,9 @@ interface CheckInDto {
   type: 'entry' | 'lunch' | 'dinner' | 'session';
   scannedBy: string;
   wasBehalf?: boolean;
+  behalfName?: string;
+  behalfMobile?: string;
+  behalfGender?: 'male' | 'female' | 'others';
 }
 
 @ApiTags('Universal Check-in')
@@ -74,9 +77,9 @@ export class UniversalCheckinController {
             gender: farmer.gender,
             caste: farmer.caste,
             qrCode: farmer.qrCode,
-            behalfName: farmer.behalfName,
-            behalfMobile: farmer.behalfMobile,
-            behalfGender: farmer.behalfGender,
+            behalfName: farmer.behalfName || null,
+            behalfMobile: farmer.behalfMobile || null,
+            behalfGender: farmer.behalfGender || null,
             isBehalfAttending: farmer.isBehalfAttending || false,
             hasCheckedIn: {
               entry: farmer.hasEntryCheckIn || false,
@@ -127,11 +130,11 @@ export class UniversalCheckinController {
     throw new NotFoundException('QR code not found in system');
   }
 
-  // ✅ CHECK-IN - Creates check-in record DIRECTLY (no cache dependency)
+  // ✅ CHECK-IN - Creates check-in record with behalf support
   @Post(':qrCode')
   @ApiOperation({ 
     summary: 'Universal check-in',
-    description: 'Creates a check-in record for farmer or guest. Tries farmer first, then guest.'
+    description: 'Creates a check-in record for farmer or guest. Supports behalf person check-in for farmers.'
   })
   @ApiParam({ name: 'qrCode', description: 'QR code to check in' })
   @ApiBody({
@@ -152,6 +155,22 @@ export class UniversalCheckinController {
           type: 'boolean',
           description: 'Whether this check-in is for a behalf person',
           default: false
+        },
+        behalfName: {
+          type: 'string',
+          description: 'Name of behalf person (required if wasBehalf is true)',
+          required: false
+        },
+        behalfMobile: {
+          type: 'string',
+          description: 'Mobile of behalf person (required if wasBehalf is true)',
+          required: false
+        },
+        behalfGender: {
+          type: 'string',
+          enum: ['male', 'female', 'others'],
+          description: 'Gender of behalf person (required if wasBehalf is true)',
+          required: false
         }
       },
       required: ['type', 'scannedBy']
@@ -165,6 +184,19 @@ export class UniversalCheckinController {
 
     if (!['entry', 'lunch', 'dinner', 'session'].includes(checkInDto.type)) {
       throw new BadRequestException('Invalid check-in type. Must be: entry, lunch, dinner, or session');
+    }
+
+    // ✅ Validate behalf data if wasBehalf is true
+    if (checkInDto.wasBehalf) {
+      if (!checkInDto.behalfName || !checkInDto.behalfMobile || !checkInDto.behalfGender) {
+        throw new BadRequestException(
+          'behalfName, behalfMobile, and behalfGender are required when wasBehalf is true'
+        );
+      }
+      
+      if (!['male', 'female', 'others'].includes(checkInDto.behalfGender)) {
+        throw new BadRequestException('behalfGender must be: male, female, or others');
+      }
     }
 
     try {
@@ -197,9 +229,9 @@ export class UniversalCheckinController {
               district: farmer.district,
               category: farmer.category,
               qrCode: farmer.qrCode,
-              behalfName: farmer.behalfName,
-              behalfMobile: farmer.behalfMobile,
-              behalfGender: farmer.behalfGender,
+              behalfName: farmer.behalfName || null,
+              behalfMobile: farmer.behalfMobile || null,
+              behalfGender: farmer.behalfGender || null,
               isBehalfAttending: farmer.isBehalfAttending || false,
               hasCheckedIn: {
                 entry: farmer.hasEntryCheckIn || false,
@@ -211,7 +243,17 @@ export class UniversalCheckinController {
           };
         }
 
-        // ✅ Create check-in record DIRECTLY
+        // ✅ If wasBehalf is true, update farmer's behalf information
+        if (checkInDto.wasBehalf) {
+          farmer.behalfName = checkInDto.behalfName;
+          farmer.behalfMobile = checkInDto.behalfMobile;
+          farmer.behalfGender = checkInDto.behalfGender;
+          farmer.isBehalfAttending = true;
+          
+          this.logger.log(`✅ Updated behalf person: ${checkInDto.behalfName}`);
+        }
+
+        // ✅ Create check-in record
         const checkIn = this.checkInRepository.create({
           type: checkInDto.type,
           registrationId: farmer.id,
@@ -223,7 +265,7 @@ export class UniversalCheckinController {
         await this.checkInRepository.save(checkIn);
         this.logger.log(`✅ CheckIn record created for farmer ${farmer.id}`);
 
-        // ✅ Update farmer flags DIRECTLY
+        // ✅ Update farmer check-in flags
         if (checkInDto.type === 'entry') farmer.hasEntryCheckIn = true;
         if (checkInDto.type === 'lunch') farmer.hasLunchCheckIn = true;
         if (checkInDto.type === 'dinner') farmer.hasDinnerCheckIn = true;
@@ -241,7 +283,7 @@ export class UniversalCheckinController {
 
         return {
           success: true,
-          message: `${checkInDto.type.toUpperCase()} check-in successful`,
+          message: `${checkInDto.type.toUpperCase()} check-in successful${checkInDto.wasBehalf ? ' (Behalf person)' : ''}`,
           type: 'farmer',
           attendeeType: 'FARMER',
           data: {
@@ -253,9 +295,9 @@ export class UniversalCheckinController {
             district: updatedFarmer.district,
             category: updatedFarmer.category,
             qrCode: updatedFarmer.qrCode,
-            behalfName: updatedFarmer.behalfName,
-            behalfMobile: updatedFarmer.behalfMobile,
-            behalfGender: updatedFarmer.behalfGender,
+            behalfName: updatedFarmer.behalfName || null,
+            behalfMobile: updatedFarmer.behalfMobile || null,
+            behalfGender: updatedFarmer.behalfGender || null,
             isBehalfAttending: updatedFarmer.isBehalfAttending || false,
             hasCheckedIn: {
               entry: updatedFarmer.hasEntryCheckIn || false,
@@ -276,6 +318,11 @@ export class UniversalCheckinController {
       const guest = await this.guestPassesService.getByQrCode(qrCode);
       
       this.logger.log(`✅ Checking in Guest: ${guest.name || 'Unassigned'}`);
+      
+      // ✅ Guests don't support behalf check-in
+      if (checkInDto.wasBehalf) {
+        throw new BadRequestException('Behalf check-in is not supported for guests');
+      }
       
       // Check if already checked in
       const alreadyCheckedIn = 
@@ -309,7 +356,7 @@ export class UniversalCheckinController {
         };
       }
 
-      // ✅ Create guest check-in record DIRECTLY
+      // ✅ Create guest check-in record
       const guestCheckIn = this.guestCheckInRepository.create({
         type: checkInDto.type,
         guestPassId: guest.id,
@@ -320,7 +367,7 @@ export class UniversalCheckinController {
       await this.guestCheckInRepository.save(guestCheckIn);
       this.logger.log(`✅ GuestCheckIn record created for guest ${guest.id}`);
 
-      // ✅ Update guest flags DIRECTLY
+      // ✅ Update guest flags
       if (checkInDto.type === 'entry') guest.hasEntryCheckIn = true;
       if (checkInDto.type === 'lunch') guest.hasLunchCheckIn = true;
       if (checkInDto.type === 'dinner') guest.hasDinnerCheckIn = true;
