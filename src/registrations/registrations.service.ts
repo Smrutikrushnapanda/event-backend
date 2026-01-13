@@ -348,23 +348,86 @@ export class RegistrationsService {
     return registration;
   }
 
-  async addBehalf(id: string, dto: AddBehalfDto): Promise<Registration> {
-    const registration = await this.findById(id);
+async addBehalf(id: string, dto: AddBehalfDto): Promise<Registration> {
+  try {
+    // Find the registration
+    const registration = await this.registrationRepository.findOne({
+      where: { id },
+    });
+
+    if (!registration) {
+      throw new NotFoundException('Registration not found');
+    }
+
+    // Check if behalf person already exists
+    if (registration.behalfName) {
+      throw new BadRequestException('Behalf person already registered for this farmer');
+    }
+
+    // Update behalf fields
     registration.behalfName = dto.behalfName;
     registration.behalfMobile = dto.behalfMobile;
     registration.behalfGender = dto.behalfGender;
-    registration.isBehalfAttending = true;
-    return this.registrationRepository.save(registration);
-  }
+    registration.isBehalfAttending = true; // Set to true by default when adding
 
-  async toggleBehalf(id: string, isBehalfAttending: boolean): Promise<Registration> {
-    const registration = await this.findById(id);
+    // Save and return
+    const updated = await this.registrationRepository.save(registration);
+
+    // Invalidate cache if using cache
+    if (registration.qrCode) {
+      this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+        console.error('Cache invalidation failed:', err);
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    console.error('❌ Add behalf error:', error);
+    
+    if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      throw error;
+    }
+    
+    throw new BadRequestException(`Failed to add behalf person: ${error.message}`);
+  }
+}
+
+async toggleBehalf(id: string, isBehalfAttending: boolean): Promise<Registration> {
+  try {
+    const registration = await this.registrationRepository.findOne({
+      where: { id },
+    });
+
+    if (!registration) {
+      throw new NotFoundException('Registration not found');
+    }
+
     if (!registration.behalfName) {
       throw new BadRequestException('No behalf person registered for this farmer');
     }
+
     registration.isBehalfAttending = isBehalfAttending;
-    return this.registrationRepository.save(registration);
+    
+    const updated = await this.registrationRepository.save(registration);
+
+    // Invalidate cache
+    if (registration.qrCode) {
+      this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+        console.error('Cache invalidation failed:', err);
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    console.error('❌ Toggle behalf error:', error);
+    
+    if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      throw error;
+    }
+    
+    throw new BadRequestException(`Failed to toggle behalf attendance: ${error.message}`);
   }
+}
 
   async getCheckIns(id: string) {
     const registration = await this.findById(id);

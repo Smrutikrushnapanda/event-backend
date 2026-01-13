@@ -49,7 +49,7 @@ export class UniversalCheckinController {
           message: 'Farmer found',
           type: 'farmer',
           attendeeType: 'FARMER',
-          attendee: {
+          data: {
             id: farmer.id,
             name: farmer.name,
             mobile: farmer.mobile,
@@ -89,7 +89,7 @@ export class UniversalCheckinController {
         message: guest.isAssigned ? 'Guest found' : 'Unassigned guest pass',
         type: 'guest',
         attendeeType: 'GUEST',
-        attendee: {
+        data: {
           id: guest.id,
           name: guest.name,
           mobile: guest.mobile,
@@ -174,7 +174,7 @@ export class UniversalCheckinController {
             type: 'farmer',
             attendeeType: 'FARMER',
             alreadyCheckedIn: true,
-            attendee: {
+            data: {
               id: farmer.id,
               name: farmer.name,
               mobile: farmer.mobile,
@@ -226,7 +226,7 @@ export class UniversalCheckinController {
           message: `${checkInDto.type.toUpperCase()} check-in successful`,
           type: 'farmer',
           attendeeType: 'FARMER',
-          attendee: {
+          data: {
             id: updatedFarmer.id,
             name: updatedFarmer.name,
             mobile: updatedFarmer.mobile,
@@ -273,7 +273,7 @@ export class UniversalCheckinController {
           type: 'guest',
           attendeeType: 'GUEST',
           alreadyCheckedIn: true,
-          attendee: {
+          data: {
             id: guest.id,
             name: guest.name,
             mobile: guest.mobile,
@@ -315,7 +315,7 @@ export class UniversalCheckinController {
         message: `${checkInDto.type.toUpperCase()} check-in successful`,
         type: 'guest',
         attendeeType: 'GUEST',
-        attendee: {
+        data: {
           id: updatedGuest.id,
           name: updatedGuest.name,
           mobile: updatedGuest.mobile,

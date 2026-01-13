@@ -343,18 +343,38 @@ export class RegistrationsController {
     };
   }
 
-  @Post(':id/delegate')
-  @ApiOperation({ summary: 'Add behalf person to registration' })
-  @ApiParam({ name: 'id', description: 'Registration UUID' })
-  @ApiBody({ type: AddBehalfDto })
-  @ApiResponse({ status: 200, description: 'Behalf person added successfully' })
-  @ApiResponse({ status: 404, description: 'Registration not found' })
-  addBehalf(
-    @Param('id') id: string,
-    @Body() dto: AddBehalfDto,
-  ) {
-    return this.registrationsService.addBehalf(id, dto);
+@Post(':id/delegate')
+@ApiOperation({ summary: 'Add behalf person to registration' })
+@ApiParam({ name: 'id', description: 'Registration UUID' })
+@ApiBody({ type: AddBehalfDto })
+@ApiResponse({ status: 200, description: 'Behalf person added successfully' })
+@ApiResponse({ status: 400, description: 'Behalf person already exists or validation failed' })
+@ApiResponse({ status: 404, description: 'Registration not found' })
+async addBehalf(
+  @Param('id') id: string,
+  @Body() dto: AddBehalfDto,
+) {
+  try {
+    const updated = await this.registrationsService.addBehalf(id, dto);
+    
+    return {
+      success: true,
+      message: 'Behalf person added successfully',
+      data: {
+        id: updated.id,
+        name: updated.name,
+        qrCode: updated.qrCode,
+        behalfName: updated.behalfName,
+        behalfMobile: updated.behalfMobile,
+        behalfGender: updated.behalfGender,
+        isBehalfAttending: updated.isBehalfAttending,
+      },
+    };
+  } catch (error) {
+    console.error('❌ Controller: Add behalf error:', error);
+    throw error; // Let NestJS exception filters handle it
   }
+}
 
   @Patch(':id/delegate/toggle')
   @ApiOperation({ summary: 'Toggle between original farmer and behalf person attendance' })
