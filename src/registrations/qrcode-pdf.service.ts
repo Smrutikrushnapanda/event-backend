@@ -29,7 +29,7 @@ export class QRCodePDFService {
     margin: 20,
     qrSize: 20.00,
     labelWidth: 105,
-    labelHeight: 60,
+    labelHeight: 46,
     spacingX: 5,
     spacingY: 5,
   };
