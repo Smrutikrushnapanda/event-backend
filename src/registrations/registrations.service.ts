@@ -12,6 +12,7 @@ import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { AddBehalfDto } from './dto/add-behalf.dto';
 import { StatisticsResponseDto } from './dto/statistics-response.dto';
 import { RegistrationCacheService } from './registration-cache.service';
+import { UpdateRegistrationDto } from './dto/update-registration.dto';
 
 @Injectable()
 export class RegistrationsService {
@@ -499,4 +500,48 @@ export class RegistrationsService {
       cache: cacheHealthy,
     };
   }
+
+  async update(id: string, dto: UpdateRegistrationDto): Promise<Registration> {
+  const registration = await this.registrationRepository.findOne({
+    where: { id },
+  });
+
+  if (!registration) {
+    throw new NotFoundException('Registration not found');
+  }
+
+  // Check mobile uniqueness if being updated
+  if (dto.mobile && dto.mobile !== registration.mobile) {
+    const existingMobile = await this.registrationRepository.findOne({
+      where: { mobile: dto.mobile },
+    });
+    if (existingMobile) {
+      throw new ConflictException('Mobile number already registered');
+    }
+  }
+
+  // Check aadhaar uniqueness if being updated
+  if (dto.aadhaarOrId && dto.aadhaarOrId !== registration.aadhaarOrId) {
+    const existingAadhaar = await this.registrationRepository.findOne({
+      where: { aadhaarOrId: dto.aadhaarOrId },
+    });
+    if (existingAadhaar) {
+      throw new ConflictException('Aadhaar/ID already registered');
+    }
+  }
+
+  // Update only provided fields
+  Object.assign(registration, dto);
+
+  const updated = await this.registrationRepository.save(registration);
+
+  // Invalidate cache
+  if (registration.qrCode) {
+    this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+      console.error('Cache invalidation failed:', err);
+    });
+  }
+
+  return updated;
+}
 }

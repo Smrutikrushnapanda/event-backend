@@ -30,6 +30,7 @@ import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { CheckInDto } from './dto/checkin.dto';
 import { AddBehalfDto } from './dto/add-behalf.dto';
 import { CheckIn } from './entities/checkin.entity';
+import { UpdateRegistrationDto } from './dto/update-registration.dto';
 
 @ApiTags('Registrations')
 @Controller('registrations')
@@ -627,4 +628,28 @@ export class RegistrationsController {
       timestamp: new Date(),
     };
   }
+
+  @Patch(':id')
+@ApiOperation({ summary: 'Update registration by ID' })
+@ApiParam({ name: 'id', description: 'Registration UUID' })
+@ApiBody({ type: UpdateRegistrationDto })
+@ApiResponse({ status: 200, description: 'Registration updated successfully' })
+@ApiResponse({ status: 404, description: 'Registration not found' })
+@ApiResponse({ status: 409, description: 'Mobile/Aadhaar already in use' })
+async update(
+  @Param('id') id: string,
+  @Body() dto: UpdateRegistrationDto,
+) {
+  try {
+    const updated = await this.registrationsService.update(id, dto);
+    return {
+      success: true,
+      message: 'Registration updated successfully',
+      data: updated,
+    };
+  } catch (error) {
+    console.error('❌ Update registration error:', error);
+    throw error;
+  }
+}
 }
