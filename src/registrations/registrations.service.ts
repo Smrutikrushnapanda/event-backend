@@ -174,7 +174,7 @@ export class RegistrationsService {
     qrCode: string,
     checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
     scannedBy?: string,
-    wasDelegate: boolean = false,
+    wasBehalfPerson: boolean = false, // ✅ Changed from wasDelegate
   ): Promise<{ success: boolean; message: string; registration?: any }> {
     try {
       const registration = await this.cacheService.getByQrCode(qrCode);
@@ -205,7 +205,7 @@ export class RegistrationsService {
         type: checkInType,
         registrationId: registration.id,
         scannedBy: scannedBy || 'Volunteer',
-        wasBehalf: wasDelegate,
+        wasBehalf: wasBehalfPerson, // ✅ Now matches
       });
 
       this.checkInRepository.save(checkIn).catch(err => {
@@ -313,25 +313,46 @@ export class RegistrationsService {
     return response;
   }
 
-  async findAllForExport(): Promise<Registration[]> {
-    return this.registrationRepository.find({
-      relations: ['checkIns'],
-      order: { createdAt: 'DESC' },
-    });
+  // ✅ NEW: Updated with district/block filtering and ordering
+  async findAllForExport(district?: string, block?: string): Promise<Registration[]> {
+    const queryBuilder = this.registrationRepository
+      .createQueryBuilder('registration')
+      .leftJoinAndSelect('registration.checkIns', 'checkIns')
+      .orderBy('registration.district', 'ASC')
+      .addOrderBy('registration.block', 'ASC')
+      .addOrderBy('registration.name', 'ASC');
+
+    if (district) {
+      queryBuilder.andWhere('registration.district = :district', { district });
+    }
+
+    if (block) {
+      queryBuilder.andWhere('registration.block = :block', { block });
+    }
+
+    return queryBuilder.getMany();
   }
 
   async findByBlockForExport(block: string): Promise<Registration[]> {
     return this.registrationRepository.find({
       where: { block },
       relations: ['checkIns'],
-      order: { createdAt: 'DESC' },
+      order: { 
+        district: 'ASC',
+        block: 'ASC',
+        name: 'ASC',
+      },
     });
   }
 
   async findAll(): Promise<Registration[]> {
     return this.registrationRepository.find({
       relations: ['checkIns'],
-      order: { createdAt: 'DESC' },
+      order: { 
+        district: 'ASC',
+        block: 'ASC',
+        name: 'ASC',
+      },
     });
   }
 
@@ -348,86 +369,80 @@ export class RegistrationsService {
     return registration;
   }
 
-async addBehalf(id: string, dto: AddBehalfDto): Promise<Registration> {
-  try {
-    // Find the registration
-    const registration = await this.registrationRepository.findOne({
-      where: { id },
-    });
-
-    if (!registration) {
-      throw new NotFoundException('Registration not found');
-    }
-
-    // Check if behalf person already exists
-    if (registration.behalfName) {
-      throw new BadRequestException('Behalf person already registered for this farmer');
-    }
-
-    // Update behalf fields
-    registration.behalfName = dto.behalfName;
-    registration.behalfMobile = dto.behalfMobile;
-    registration.behalfGender = dto.behalfGender;
-    registration.isBehalfAttending = true; // Set to true by default when adding
-
-    // Save and return
-    const updated = await this.registrationRepository.save(registration);
-
-    // Invalidate cache if using cache
-    if (registration.qrCode) {
-      this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
-        console.error('Cache invalidation failed:', err);
+  async addBehalf(id: string, dto: AddBehalfDto): Promise<Registration> {
+    try {
+      const registration = await this.registrationRepository.findOne({
+        where: { id },
       });
-    }
 
-    return updated;
-  } catch (error) {
-    console.error('❌ Add behalf error:', error);
-    
-    if (error instanceof NotFoundException || error instanceof BadRequestException) {
-      throw error;
+      if (!registration) {
+        throw new NotFoundException('Registration not found');
+      }
+
+      if (registration.behalfName) {
+        throw new BadRequestException('Behalf person already registered for this farmer');
+      }
+
+      registration.behalfName = dto.behalfName;
+      registration.behalfMobile = dto.behalfMobile;
+      registration.behalfGender = dto.behalfGender;
+      registration.isBehalfAttending = true;
+
+      const updated = await this.registrationRepository.save(registration);
+
+      if (registration.qrCode) {
+        this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+          console.error('Cache invalidation failed:', err);
+        });
+      }
+
+      return updated;
+    } catch (error) {
+      console.error('❌ Add behalf error:', error);
+      
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      throw new BadRequestException(`Failed to add behalf person: ${error.message}`);
     }
-    
-    throw new BadRequestException(`Failed to add behalf person: ${error.message}`);
   }
-}
 
-async toggleBehalf(id: string, isBehalfAttending: boolean): Promise<Registration> {
-  try {
-    const registration = await this.registrationRepository.findOne({
-      where: { id },
-    });
-
-    if (!registration) {
-      throw new NotFoundException('Registration not found');
-    }
-
-    if (!registration.behalfName) {
-      throw new BadRequestException('No behalf person registered for this farmer');
-    }
-
-    registration.isBehalfAttending = isBehalfAttending;
-    
-    const updated = await this.registrationRepository.save(registration);
-
-    // Invalidate cache
-    if (registration.qrCode) {
-      this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
-        console.error('Cache invalidation failed:', err);
+  async toggleBehalf(id: string, isBehalfAttending: boolean): Promise<Registration> {
+    try {
+      const registration = await this.registrationRepository.findOne({
+        where: { id },
       });
-    }
 
-    return updated;
-  } catch (error) {
-    console.error('❌ Toggle behalf error:', error);
-    
-    if (error instanceof NotFoundException || error instanceof BadRequestException) {
-      throw error;
+      if (!registration) {
+        throw new NotFoundException('Registration not found');
+      }
+
+      if (!registration.behalfName) {
+        throw new BadRequestException('No behalf person registered for this farmer');
+      }
+
+      registration.isBehalfAttending = isBehalfAttending;
+      
+      const updated = await this.registrationRepository.save(registration);
+
+      if (registration.qrCode) {
+        this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+          console.error('Cache invalidation failed:', err);
+        });
+      }
+
+      return updated;
+    } catch (error) {
+      console.error('❌ Toggle behalf error:', error);
+      
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      throw new BadRequestException(`Failed to toggle behalf attendance: ${error.message}`);
     }
-    
-    throw new BadRequestException(`Failed to toggle behalf attendance: ${error.message}`);
   }
-}
 
   async getCheckIns(id: string) {
     const registration = await this.findById(id);

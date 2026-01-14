@@ -125,6 +125,33 @@ export class RegistrationsController {
     }
   }
 
+  // ✅ NEW: Get filtered count
+  @Get('export/count')
+  @ApiOperation({ summary: 'Get registration count with optional filters' })
+  @ApiQuery({ name: 'district', required: false, type: String })
+  @ApiQuery({ name: 'block', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Returns filtered count' })
+  async getFilteredCount(
+    @Query('district') district?: string,
+    @Query('block') block?: string,
+  ) {
+    try {
+      const registrations = await this.registrationsService.findAllForExport(
+        district || undefined,
+        block || undefined,
+      );
+
+      return {
+        count: registrations.length,
+        district: district || 'All',
+        block: block || 'All',
+      };
+    } catch (error) {
+      console.error('Count error:', error);
+      throw error;
+    }
+  }
+
   @Get('export/csv')
   @ApiOperation({ summary: 'Export all registrations to CSV' })
   @ApiResponse({ status: 200, description: 'CSV file generated successfully' })
@@ -343,38 +370,38 @@ export class RegistrationsController {
     };
   }
 
-@Post(':id/delegate')
-@ApiOperation({ summary: 'Add behalf person to registration' })
-@ApiParam({ name: 'id', description: 'Registration UUID' })
-@ApiBody({ type: AddBehalfDto })
-@ApiResponse({ status: 200, description: 'Behalf person added successfully' })
-@ApiResponse({ status: 400, description: 'Behalf person already exists or validation failed' })
-@ApiResponse({ status: 404, description: 'Registration not found' })
-async addBehalf(
-  @Param('id') id: string,
-  @Body() dto: AddBehalfDto,
-) {
-  try {
-    const updated = await this.registrationsService.addBehalf(id, dto);
-    
-    return {
-      success: true,
-      message: 'Behalf person added successfully',
-      data: {
-        id: updated.id,
-        name: updated.name,
-        qrCode: updated.qrCode,
-        behalfName: updated.behalfName,
-        behalfMobile: updated.behalfMobile,
-        behalfGender: updated.behalfGender,
-        isBehalfAttending: updated.isBehalfAttending,
-      },
-    };
-  } catch (error) {
-    console.error('❌ Controller: Add behalf error:', error);
-    throw error; // Let NestJS exception filters handle it
+  @Post(':id/delegate')
+  @ApiOperation({ summary: 'Add behalf person to registration' })
+  @ApiParam({ name: 'id', description: 'Registration UUID' })
+  @ApiBody({ type: AddBehalfDto })
+  @ApiResponse({ status: 200, description: 'Behalf person added successfully' })
+  @ApiResponse({ status: 400, description: 'Behalf person already exists or validation failed' })
+  @ApiResponse({ status: 404, description: 'Registration not found' })
+  async addBehalf(
+    @Param('id') id: string,
+    @Body() dto: AddBehalfDto,
+  ) {
+    try {
+      const updated = await this.registrationsService.addBehalf(id, dto);
+      
+      return {
+        success: true,
+        message: 'Behalf person added successfully',
+        data: {
+          id: updated.id,
+          name: updated.name,
+          qrCode: updated.qrCode,
+          behalfName: updated.behalfName,
+          behalfMobile: updated.behalfMobile,
+          behalfGender: updated.behalfGender,
+          isBehalfAttending: updated.isBehalfAttending,
+        },
+      };
+    } catch (error) {
+      console.error('❌ Controller: Add behalf error:', error);
+      throw error;
+    }
   }
-}
 
   @Patch(':id/delegate/toggle')
   @ApiOperation({ summary: 'Toggle between original farmer and behalf person attendance' })
@@ -405,7 +432,7 @@ async addBehalf(
   }
 
   @Get('export/qr-pdf')
-  @ApiOperation({ summary: 'Export all registrations as QR code labels PDF (10mm x 10mm)' })
+  @ApiOperation({ summary: 'Export all registrations as QR code labels PDF (ordered by district/block)' })
   @ApiResponse({ status: 200, description: 'PDF with QR code labels generated successfully' })
   async exportQRCodePDF(@Res() res: Response) {
     try {
@@ -413,7 +440,7 @@ async addBehalf(
       
       console.log(`📄 Generating QR code PDF for ${registrations.length} registrations...`);
 
-      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDF(registrations);
+      const pdfBuffer = await this.qrCodePDFService.generateQRCodePDF(registrations, 1);
 
       const filename = `MPSO_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
 
@@ -429,8 +456,45 @@ async addBehalf(
     }
   }
 
+  // ✅ NEW: Export QR PDF with filters
+  @Get('export/qr-pdf-filtered')
+  @ApiOperation({ summary: 'Export QR code PDF with district/block filters' })
+  @ApiQuery({ name: 'district', required: false, type: String })
+  @ApiQuery({ name: 'block', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Filtered PDF generated successfully' })
+  async exportQRPDFFiltered(
+    @Query('district') district: string,
+    @Query('block') block: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const registrations = await this.registrationsService.findAllForExport(
+        district || undefined,
+        block || undefined,
+      );
+
+      if (registrations.length === 0) {
+        throw new NotFoundException('No registrations found for the specified filters');
+      }
+
+      const buffer = await this.qrCodePDFService.generateQRCodePDF(registrations, 1);
+
+      const filterName = block ? block : district ? district : 'All';
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filterName}_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf"`,
+        'Content-Length': buffer.length,
+      });
+
+      res.send(buffer);
+    } catch (error) {
+      console.error('Filtered QR PDF export error:', error);
+      throw error;
+    }
+  }
+
   @Get('export/qr-pdf/:blockName')
-  @ApiOperation({ summary: 'Export block registrations as QR code labels PDF (10mm x 10mm)' })
+  @ApiOperation({ summary: 'Export block registrations as QR code labels PDF' })
   @ApiParam({ name: 'blockName', example: 'Bhubaneswar' })
   @ApiResponse({ status: 200, description: 'PDF with QR code labels generated successfully' })
   async exportBlockQRCodePDF(
@@ -458,25 +522,76 @@ async addBehalf(
     }
   }
 
+  // ✅ UPDATED: Export QR PDF Range with filters
+  @Get('export/qr-pdf/range/:start/:end')
+  @ApiOperation({ summary: 'Export QR code PDF for specific range with optional filters' })
+  @ApiParam({ name: 'start', example: '1' })
+  @ApiParam({ name: 'end', example: '500' })
+  @ApiQuery({ name: 'district', required: false, type: String })
+  @ApiQuery({ name: 'block', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Range PDF generated successfully' })
+  async exportQRPDFRange(
+    @Param('start') start: string,
+    @Param('end') end: string,
+    @Query('district') district: string,
+    @Query('block') block: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const startNum = parseInt(start);
+      const endNum = parseInt(end);
+
+      if (isNaN(startNum) || isNaN(endNum) || startNum < 1 || endNum < startNum) {
+        throw new BadRequestException('Invalid range');
+      }
+
+      const registrations = await this.registrationsService.findAllForExport(
+        district || undefined,
+        block || undefined,
+      );
+
+      if (registrations.length === 0) {
+        throw new NotFoundException('No registrations found');
+      }
+
+      const buffer = await this.qrCodePDFService.generateQRCodePDFRange(
+        registrations,
+        startNum,
+        endNum,
+      );
+
+      const filterName = block ? `${block}_` : district ? `${district}_` : '';
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filterName}QR_Codes_${start}-${end}_${new Date().toISOString().split('T')[0]}.pdf"`,
+        'Content-Length': buffer.length,
+      });
+
+      res.send(buffer);
+    } catch (error) {
+      console.error('Range QR PDF export error:', error);
+      throw error;
+    }
+  }
+
   @Post('fast-checkin/:qrCode')
-@HttpCode(HttpStatus.OK)
-@ApiOperation({ 
-  summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
-  description: 'Optimized endpoint for high-volume event scanning.',
-})
-@ApiResponse({ status: 200, description: 'Check-in processed' })
-async fastCheckIn(
-  @Param('qrCode') qrCode: string,
-  @Body() body: CheckInDto,
-) {
-  // ✅ FIX: Cast body.type to proper union type
-  return this.registrationsService.fastCheckIn(
-    qrCode,
-    body.type as 'entry' | 'lunch' | 'dinner' | 'session', // Add type assertion here
-    body.scannedBy,
-    body.wasBehalf,
-  );
-}
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ 
+    summary: '⚡ Fast check-in for QR scanning (< 5ms response)',
+    description: 'Optimized endpoint for high-volume event scanning.',
+  })
+  @ApiResponse({ status: 200, description: 'Check-in processed' })
+  async fastCheckIn(
+    @Param('qrCode') qrCode: string,
+    @Body() body: CheckInDto,
+  ) {
+    return this.registrationsService.fastCheckIn(
+      qrCode,
+      body.type as 'entry' | 'lunch' | 'dinner' | 'session',
+      body.scannedBy,
+      body.wasBehalf,
+    );
+  }
 
   @Post('bulk')
   @ApiOperation({ 
@@ -512,38 +627,4 @@ async fastCheckIn(
       timestamp: new Date(),
     };
   }
-
-  @Get('export/qr-pdf/range/:start/:end')
-async exportQRPDFRange(
-  @Param('start') start: string,
-  @Param('end') end: string,
-  @Res() res: Response,
-) {
-  try {
-    const startNum = parseInt(start);
-    const endNum = parseInt(end);
-
-    if (isNaN(startNum) || isNaN(endNum) || startNum < 1 || endNum < startNum) {
-      throw new BadRequestException('Invalid range');
-    }
-
-    const registrations = await this.registrationsService.findAllForExport();
-    const buffer = await this.qrCodePDFService.generateQRCodePDFRange(
-      registrations,
-      startNum,
-      endNum
-    );
-
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="QR_Codes_${start}-${end}_${new Date().toISOString().split('T')[0]}.pdf"`,
-      'Content-Length': buffer.length,
-    });
-
-    res.send(buffer);
-  } catch (error) {
-    console.error('Range QR PDF export error:', error);
-    throw error;
-  }
-}
 }
