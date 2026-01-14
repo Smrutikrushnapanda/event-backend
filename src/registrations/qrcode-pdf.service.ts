@@ -7,6 +7,7 @@ interface QRLabel {
   qrCode: string;
   name: string;
   block: string;
+  district: string;
 }
 
 interface PDFConfig {
@@ -23,10 +24,10 @@ interface PDFConfig {
 @Injectable()
 export class QRCodePDFService {
   private readonly PDF_CONFIG: PDFConfig = {
-    pageWidth: 595, // A4 width in points
-    pageHeight: 842, // A4 height in points
+    pageWidth: 595,
+    pageHeight: 842,
     margin: 20,
-    qrSize: 22.68, // 8mm in points (1mm = 2.835 points)
+    qrSize: 20.00,
     labelWidth: 105,
     labelHeight: 60,
     spacingX: 5,
@@ -37,14 +38,17 @@ export class QRCodePDFService {
    * Generate PDF with QR code labels (8mm x 8mm QR codes)
    * Multiple QR codes per page in a grid layout
    */
-  async generateQRCodePDF(registrations: Registration[]): Promise<Buffer> {
+  async generateQRCodePDF(
+    registrations: Registration[],
+    startIndex: number = 1 // ✅ Added start index parameter
+  ): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {
         if (!registrations || registrations.length === 0) {
           throw new Error('No registrations provided for PDF generation');
         }
 
-        console.log(`📄 Generating QR code PDF for ${registrations.length} registrations...`);
+        console.log(`📄 Generating QR code PDF for ${registrations.length} registrations (starting at #${startIndex})...`);
 
         const doc = new PDFDocument({
           size: 'A4',
@@ -62,7 +66,6 @@ export class QRCodePDFService {
         });
         doc.on('error', reject);
 
-        // Calculate grid layout
         const { cols, rows, labelsPerPage } = this.calculateGridLayout();
 
         console.log(`📊 Layout: ${cols} columns × ${rows} rows = ${labelsPerPage} labels per page`);
@@ -70,43 +73,42 @@ export class QRCodePDFService {
         let currentLabel = 0;
 
         for (const reg of registrations) {
-          // Validate registration data
           if (!reg.qrCode || !reg.name || !reg.block) {
             console.warn(`⚠️ Skipping invalid registration: ${reg.name || 'Unknown'}`);
             continue;
           }
 
-          // Calculate position
           const positionInPage = currentLabel % labelsPerPage;
           const col = positionInPage % cols;
           const row = Math.floor(positionInPage / cols);
 
-          // Add new page if needed
           if (positionInPage === 0 && currentLabel > 0) {
             doc.addPage();
             console.log(`📄 Added page ${Math.floor(currentLabel / labelsPerPage) + 1}`);
           }
 
-          // Calculate X and Y position with spacing
           const labelX = this.PDF_CONFIG.margin + col * (this.PDF_CONFIG.labelWidth + this.PDF_CONFIG.spacingX);
           const labelY = this.PDF_CONFIG.margin + row * (this.PDF_CONFIG.labelHeight + this.PDF_CONFIG.spacingY);
 
-          // Draw label
-          await this.drawLabel(doc, {
-            qrCode: reg.qrCode,
-            name: reg.name,
-            block: reg.block,
-          }, labelX, labelY);
+          await this.drawLabel(
+            doc,
+            {
+              qrCode: reg.qrCode,
+              name: reg.name,
+              block: reg.block,
+              district: reg.district,
+            },
+            labelX,
+            labelY
+          );
 
           currentLabel++;
 
-          // Log progress every 50 labels
           if (currentLabel % 50 === 0) {
             console.log(`✅ Processed ${currentLabel}/${registrations.length} labels`);
           }
         }
 
-        // Finalize PDF
         doc.end();
 
         console.log(`✅ Generated PDF with ${currentLabel} QR codes on ${Math.ceil(currentLabel / labelsPerPage)} pages`);
@@ -118,6 +120,28 @@ export class QRCodePDFService {
   }
 
   /**
+   * Generate PDF for a specific range of registrations
+   */
+  async generateQRCodePDFRange(
+    registrations: Registration[],
+    startRange: number,
+    endRange: number
+  ): Promise<Buffer> {
+    const start = Math.max(0, startRange - 1); // Convert to 0-indexed
+    const end = Math.min(registrations.length, endRange);
+    
+    if (start >= registrations.length || start >= end) {
+      throw new Error(`Invalid range: ${startRange}-${endRange}`);
+    }
+
+    const rangeRegistrations = registrations.slice(start, end);
+    
+    console.log(`📄 Generating QR PDF for range ${startRange}-${endRange} (${rangeRegistrations.length} items)...`);
+    
+    return this.generateQRCodePDF(rangeRegistrations, startRange);
+  }
+
+  /**
    * Generate QR code PDF for specific block
    */
   async generateQRCodePDFForBlock(
@@ -125,7 +149,7 @@ export class QRCodePDFService {
     blockName: string,
   ): Promise<Buffer> {
     console.log(`📄 Generating QR code PDF for ${blockName} block (${registrations.length} registrations)...`);
-    return this.generateQRCodePDF(registrations);
+    return this.generateQRCodePDF(registrations, 1);
   }
 
   /**
@@ -175,7 +199,12 @@ export class QRCodePDFService {
           const labelX = this.PDF_CONFIG.margin + col * (this.PDF_CONFIG.labelWidth + this.PDF_CONFIG.spacingX);
           const labelY = this.PDF_CONFIG.margin + row * (this.PDF_CONFIG.labelHeight + this.PDF_CONFIG.spacingY);
 
-          await this.drawLabel(doc, label, labelX, labelY);
+          await this.drawLabel(
+            doc,
+            label,
+            labelX,
+            labelY
+          );
 
           currentLabel++;
 
@@ -209,9 +238,10 @@ export class QRCodePDFService {
       const qrIndex = headers.findIndex(h => h.includes('qr'));
       const nameIndex = headers.findIndex(h => h.includes('name'));
       const blockIndex = headers.findIndex(h => h.includes('block'));
+      const districtIndex = headers.findIndex(h => h.includes('district'));
 
-      if (qrIndex === -1 || nameIndex === -1 || blockIndex === -1) {
-        throw new Error('CSV must contain columns for qr, name, and block');
+      if (qrIndex === -1 || nameIndex === -1 || blockIndex === -1 || districtIndex === -1) {
+        throw new Error('CSV must contain columns for qr, name, block and district');
       }
 
       const labels: QRLabel[] = [];
@@ -222,14 +252,14 @@ export class QRCodePDFService {
 
         const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
 
-        if (values.length > Math.max(qrIndex, nameIndex, blockIndex)) {
+        if (values.length > Math.max(qrIndex, nameIndex, blockIndex, districtIndex)) {
           const label = {
             qrCode: values[qrIndex] || '',
             name: values[nameIndex] || '',
             block: values[blockIndex] || '',
+            district: values[districtIndex] || '',
           };
 
-          // Only add valid labels
           if (label.qrCode && label.name && label.block) {
             labels.push(label);
           }
@@ -271,9 +301,10 @@ export class QRCodePDFService {
     labelY: number,
   ): Promise<void> {
     try {
-      // Generate QR code image
+      const cleanQrCode = label.qrCode.replace(/^EVENT-/, '');
+
       const qrCodeDataUrl = await QRCode.toDataURL(label.qrCode, {
-        width: 200, // Generate at high resolution
+        width: 300,
         margin: 0,
         errorCorrectionLevel: 'M',
         color: {
@@ -282,66 +313,73 @@ export class QRCodePDFService {
         },
       });
 
-      // Convert data URL to buffer
       const base64Data = qrCodeDataUrl.split(',')[1];
       const qrImageBuffer = Buffer.from(base64Data, 'base64');
 
-      // Draw border around the entire label
+      // Border
       doc
         .rect(labelX, labelY, this.PDF_CONFIG.labelWidth, this.PDF_CONFIG.labelHeight)
+        .lineWidth(1)
         .stroke();
 
-      // QR code on the left with padding
-      const qrX = labelX + 3;
-      const qrY = labelY + (this.PDF_CONFIG.labelHeight - this.PDF_CONFIG.qrSize) / 2; // Center vertically
+      const padding = 6;
+      const topPadding = 8;
+
+      // --- QR ---
+      const qrX = labelX + padding;
+      const qrY = labelY + topPadding;
 
       doc.image(qrImageBuffer, qrX, qrY, {
         width: this.PDF_CONFIG.qrSize,
         height: this.PDF_CONFIG.qrSize,
       });
 
-      // Text on the right side
-      const textX = qrX + this.PDF_CONFIG.qrSize + 4;
-      const textStartY = labelY + 6;
-      const textWidth = this.PDF_CONFIG.labelWidth - this.PDF_CONFIG.qrSize - 10;
-
-      // Draw NAME in bold and uppercase
+      // QR text below (no EVENT-)
       doc
-        .fontSize(6)
-        .font('Helvetica-Bold')
-        .fillColor('#000000')
-        .text(label.name.toUpperCase(), textX, textStartY, {
-          width: textWidth,
-          align: 'left',
-          lineBreak: true,
-        });
-
-      // Draw BLOCK NAME in uppercase and bold
-      const blockY = textStartY + 12;
-      doc
-        .fontSize(5)
-        .font('Helvetica-Bold')
-        .fillColor('#000000')
-        .text(label.block.toUpperCase(), textX, blockY, {
-          width: textWidth,
-          align: 'left',
-          lineBreak: true,
-        });
-
-      // Draw QR Code ID at bottom
-      const qrIdY = labelY + this.PDF_CONFIG.labelHeight - 10;
-      doc
-        .fontSize(4)
         .font('Helvetica')
-        .fillColor('#666666')
-        .text(`ID: ${label.qrCode}`, textX, qrIdY, {
-          width: textWidth,
-          align: 'left',
-          lineBreak: false,
-          ellipsis: true,
+        .fontSize(4)
+        .fillColor('#000000')
+        .text(cleanQrCode, qrX, qrY + this.PDF_CONFIG.qrSize + 1, {
+          width: this.PDF_CONFIG.qrSize,
+          align: 'center',
         });
 
-      // Reset fill color to black for next label
+      // --- TEXT AREA ---
+      const textX = qrX + this.PDF_CONFIG.qrSize + 8;
+      const textWidth = this.PDF_CONFIG.labelWidth - (this.PDF_CONFIG.qrSize + padding * 3);
+
+      let currentY = labelY + 10;
+
+      // ✅ NAME (UPPERCASE, wrap enabled)
+      currentY = doc
+        .font('Helvetica-Bold')
+        .fontSize(5)
+        .fillColor('#000000')
+        .text(`NAME: ${label.name.toUpperCase()}`, textX, currentY, {
+          width: textWidth,
+          lineGap: 0,
+        }).y;
+
+      // DISTRICT
+      currentY = doc
+        .font('Helvetica')
+        .fontSize(5)
+        .fillColor('#000000')
+        .text(`DISTRICT: ${label.district.toUpperCase()}`, textX, currentY, {
+          width: textWidth,
+          lineGap: 0,
+        }).y;
+
+      // BLOCK
+      doc
+        .font('Helvetica')
+        .fontSize(5)
+        .fillColor('#000000')
+        .text(`BLOCK: ${label.block.toUpperCase()}`, textX, currentY, {
+          width: textWidth,
+          lineGap: 0,
+        });
+
       doc.fillColor('#000000');
     } catch (error) {
       console.error(`❌ Error generating QR for ${label.name}:`, error);

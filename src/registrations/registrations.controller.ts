@@ -512,4 +512,38 @@ async fastCheckIn(
       timestamp: new Date(),
     };
   }
+
+  @Get('export/qr-pdf/range/:start/:end')
+async exportQRPDFRange(
+  @Param('start') start: string,
+  @Param('end') end: string,
+  @Res() res: Response,
+) {
+  try {
+    const startNum = parseInt(start);
+    const endNum = parseInt(end);
+
+    if (isNaN(startNum) || isNaN(endNum) || startNum < 1 || endNum < startNum) {
+      throw new BadRequestException('Invalid range');
+    }
+
+    const registrations = await this.registrationsService.findAllForExport();
+    const buffer = await this.qrCodePDFService.generateQRCodePDFRange(
+      registrations,
+      startNum,
+      endNum
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="QR_Codes_${start}-${end}_${new Date().toISOString().split('T')[0]}.pdf"`,
+      'Content-Length': buffer.length,
+    });
+
+    res.send(buffer);
+  } catch (error) {
+    console.error('Range QR PDF export error:', error);
+    throw error;
+  }
+}
 }
