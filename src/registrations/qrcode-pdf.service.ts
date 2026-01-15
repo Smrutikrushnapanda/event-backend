@@ -317,10 +317,10 @@ export class QRCodePDFService {
       const qrImageBuffer = Buffer.from(base64Data, 'base64');
 
       // Border
-      doc
-        .rect(labelX, labelY, this.PDF_CONFIG.labelWidth, this.PDF_CONFIG.labelHeight)
-        .lineWidth(1)
-        .stroke();
+      //doc
+      //  .rect(labelX, labelY, this.PDF_CONFIG.labelWidth, this.PDF_CONFIG.labelHeight)
+      //  .lineWidth(1)
+      //  .stroke();
 
       const padding = 6;
       const topPadding = 8;

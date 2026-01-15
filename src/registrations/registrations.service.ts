@@ -315,42 +315,60 @@ export class RegistrationsService {
   }
 
   // ✅ PERFECT: Orders by ID, District, Block - ALL ASC
-  async findAllForExport(district?: string, block?: string): Promise<Registration[]> {
-    const queryBuilder = this.registrationRepository
-      .createQueryBuilder('registration')
-      .leftJoinAndSelect('registration.checkIns', 'checkIns')
-      .orderBy('registration.id', 'ASC')           // ⭐ 1st: ID (prevents repetition)
-      .addOrderBy('registration.district', 'ASC')   // ⭐ 2nd: District
-      .addOrderBy('registration.block', 'ASC')      // ⭐ 3rd: Block
-      .addOrderBy('registration.name', 'ASC');      // 4th: Name
+async findAllForExport(
+  district?: string, 
+  block?: string,
+  inclusionType?: 'mobile' | 'aadhaar' | 'qr',
+  inclusionValues?: string[],
+): Promise<Registration[]> {
+  const queryBuilder = this.registrationRepository
+    .createQueryBuilder('registration')
+    .leftJoinAndSelect('registration.checkIns', 'checkIns')
+    .orderBy('registration.id', 'ASC')
+    .addOrderBy('registration.district', 'ASC')
+    .addOrderBy('registration.block', 'ASC')
+    .addOrderBy('registration.name', 'ASC');
 
-    if (district) {
-      queryBuilder.andWhere('registration.district = :district', { district });
-    }
-
-    if (block) {
-      queryBuilder.andWhere('registration.block = :block', { block });
-    }
-
-    const result = await queryBuilder.getMany();
-    
-    console.log(`📦 findAllForExport: Fetched ${result.length} registrations (ordered by ID→District→Block)`);
-    if (result.length > 0) {
-      console.log(`   First ID: ${result[0].id}, Last ID: ${result[result.length - 1].id}`);
-    }
-    
-    return result;
+  if (district) {
+    queryBuilder.andWhere('registration.district = :district', { district });
   }
+
+  if (block) {
+    queryBuilder.andWhere('registration.block = :block', { block });
+  }
+
+  // ✅ NEW: Apply INCLUSION filters (only include specified values)
+  if (inclusionType && inclusionValues && inclusionValues.length > 0) {
+    switch (inclusionType) {
+      case 'mobile':
+        queryBuilder.andWhere('registration.mobile IN (:...inclusionValues)', { inclusionValues });
+        break;
+      case 'aadhaar':
+        queryBuilder.andWhere('registration.aadhaarOrId IN (:...inclusionValues)', { inclusionValues });
+        break;
+      case 'qr':
+        queryBuilder.andWhere('registration.qrCode IN (:...inclusionValues)', { inclusionValues });
+        break;
+    }
+  }
+
+  const result = await queryBuilder.getMany();
+  
+  console.log(`📦 findAllForExport: Fetched ${result.length} registrations (ordered by ID→District→Block)`);
+  if (inclusionValues && inclusionValues.length > 0) {
+    console.log(`   Included only ${inclusionValues.length} specific ${inclusionType}(s)`);
+  }
+  
+  return result;
+}
 
   async findByBlockForExport(block: string): Promise<Registration[]> {
     return this.registrationRepository.find({
       where: { block },
       relations: ['checkIns'],
       order: { 
-        id: 'ASC',        // ⭐ 1st: ID (prevents repetition)
+        createdAt: 'ASC',        // ⭐ 1st: ID (prevents repetition)
         district: 'ASC',  // ⭐ 2nd: District
-        block: 'ASC',     // ⭐ 3rd: Block
-        name: 'ASC',      // 4th: Name
       },
     });
   }
@@ -359,10 +377,8 @@ export class RegistrationsService {
     return this.registrationRepository.find({
       relations: ['checkIns'],
       order: { 
-        id: 'ASC',        // ⭐ 1st: ID (prevents repetition)
+        createdAt: 'ASC',        // ⭐ 1st: ID (prevents repetition)
         district: 'ASC',  // ⭐ 2nd: District
-        block: 'ASC',     // ⭐ 3rd: Block
-        name: 'ASC',      // 4th: Name
       },
     });
   }

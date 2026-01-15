@@ -523,57 +523,75 @@ export class RegistrationsController {
     }
   }
 
-  // ✅ UPDATED: Export QR PDF Range with filters
-  @Get('export/qr-pdf/range/:start/:end')
-  @ApiOperation({ summary: 'Export QR code PDF for specific range with optional filters' })
-  @ApiParam({ name: 'start', example: '1' })
-  @ApiParam({ name: 'end', example: '500' })
-  @ApiQuery({ name: 'district', required: false, type: String })
-  @ApiQuery({ name: 'block', required: false, type: String })
-  @ApiResponse({ status: 200, description: 'Range PDF generated successfully' })
-  async exportQRPDFRange(
-    @Param('start') start: string,
-    @Param('end') end: string,
-    @Query('district') district: string,
-    @Query('block') block: string,
-    @Res() res: Response,
-  ) {
-    try {
-      const startNum = parseInt(start);
-      const endNum = parseInt(end);
+// Updated controller method in registrations.controller.ts
 
-      if (isNaN(startNum) || isNaN(endNum) || startNum < 1 || endNum < startNum) {
-        throw new BadRequestException('Invalid range');
-      }
+// ✅ UPDATED: Export QR PDF Range with INCLUSION filters
+@Get('export/qr-pdf/range/:start/:end')
+@ApiOperation({ summary: 'Export QR code PDF for specific range with optional filters and inclusions' })
+@ApiParam({ name: 'start', example: '1' })
+@ApiParam({ name: 'end', example: '500' })
+@ApiQuery({ name: 'district', required: false, type: String })
+@ApiQuery({ name: 'block', required: false, type: String })
+@ApiQuery({ name: 'inclusionType', required: false, enum: ['mobile', 'aadhaar', 'qr'] })
+@ApiQuery({ name: 'inclusionValues', required: false, type: String, description: 'Comma-separated values to include (only these will be exported)' })
+@ApiResponse({ status: 200, description: 'Range PDF generated successfully' })
+async exportQRPDFRange(
+  @Param('start') start: string,
+  @Param('end') end: string,
+  @Query('district') district: string,
+  @Query('block') block: string,
+  @Query('inclusionType') inclusionType: 'mobile' | 'aadhaar' | 'qr',
+  @Query('inclusionValues') inclusionValues: string,
+  @Res() res: Response,
+) {
+  try {
+    const startNum = parseInt(start);
+    const endNum = parseInt(end);
 
-      const registrations = await this.registrationsService.findAllForExport(
-        district || undefined,
-        block || undefined,
-      );
-
-      if (registrations.length === 0) {
-        throw new NotFoundException('No registrations found');
-      }
-
-      const buffer = await this.qrCodePDFService.generateQRCodePDFRange(
-        registrations,
-        startNum,
-        endNum,
-      );
-
-      const filterName = block ? `${block}_` : district ? `${district}_` : '';
-      res.set({
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filterName}QR_Codes_${start}-${end}_${new Date().toISOString().split('T')[0]}.pdf"`,
-        'Content-Length': buffer.length,
-      });
-
-      res.send(buffer);
-    } catch (error) {
-      console.error('Range QR PDF export error:', error);
-      throw error;
+    if (isNaN(startNum) || isNaN(endNum) || startNum < 1 || endNum < startNum) {
+      throw new BadRequestException('Invalid range');
     }
+
+    // Parse inclusion values
+    let inclusionList: string[] = [];
+    if (inclusionValues) {
+      inclusionList = inclusionValues
+        .split(/[,\n]/)
+        .map(v => v.trim())
+        .filter(v => v.length > 0);
+    }
+
+    const registrations = await this.registrationsService.findAllForExport(
+      district || undefined,
+      block || undefined,
+      inclusionType,
+      inclusionList,
+    );
+
+    if (registrations.length === 0) {
+      throw new NotFoundException('No registrations found');
+    }
+
+    const buffer = await this.qrCodePDFService.generateQRCodePDFRange(
+      registrations,
+      startNum,
+      endNum,
+    );
+
+    const filterName = block ? `${block}_` : district ? `${district}_` : '';
+    const inclusionSuffix = inclusionList.length > 0 ? `_filtered_${inclusionList.length}` : '';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filterName}QR_Codes_${start}-${end}${inclusionSuffix}_${new Date().toISOString().split('T')[0]}.pdf"`,
+      'Content-Length': buffer.length,
+    });
+
+    res.send(buffer);
+  } catch (error) {
+    console.error('Range QR PDF export error:', error);
+    throw error;
   }
+}
 
   @Post('fast-checkin/:qrCode')
   @HttpCode(HttpStatus.OK)
