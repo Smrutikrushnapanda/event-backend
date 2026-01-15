@@ -175,7 +175,7 @@ export class RegistrationsService {
     qrCode: string,
     checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
     scannedBy?: string,
-    wasBehalfPerson: boolean = false, // ✅ Changed from wasDelegate
+    wasBehalfPerson: boolean = false,
   ): Promise<{ success: boolean; message: string; registration?: any }> {
     try {
       const registration = await this.cacheService.getByQrCode(qrCode);
@@ -206,7 +206,7 @@ export class RegistrationsService {
         type: checkInType,
         registrationId: registration.id,
         scannedBy: scannedBy || 'Volunteer',
-        wasBehalf: wasBehalfPerson, // ✅ Now matches
+        wasBehalf: wasBehalfPerson,
       });
 
       this.checkInRepository.save(checkIn).catch(err => {
@@ -314,14 +314,15 @@ export class RegistrationsService {
     return response;
   }
 
-  // ✅ NEW: Updated with district/block filtering and ordering
+  // ✅ PERFECT: Orders by ID, District, Block - ALL ASC
   async findAllForExport(district?: string, block?: string): Promise<Registration[]> {
     const queryBuilder = this.registrationRepository
       .createQueryBuilder('registration')
       .leftJoinAndSelect('registration.checkIns', 'checkIns')
-      .orderBy('registration.district', 'ASC')
-      .addOrderBy('registration.block', 'ASC')
-      .addOrderBy('registration.name', 'ASC');
+      .orderBy('registration.id', 'ASC')           // ⭐ 1st: ID (prevents repetition)
+      .addOrderBy('registration.district', 'ASC')   // ⭐ 2nd: District
+      .addOrderBy('registration.block', 'ASC')      // ⭐ 3rd: Block
+      .addOrderBy('registration.name', 'ASC');      // 4th: Name
 
     if (district) {
       queryBuilder.andWhere('registration.district = :district', { district });
@@ -331,7 +332,14 @@ export class RegistrationsService {
       queryBuilder.andWhere('registration.block = :block', { block });
     }
 
-    return queryBuilder.getMany();
+    const result = await queryBuilder.getMany();
+    
+    console.log(`📦 findAllForExport: Fetched ${result.length} registrations (ordered by ID→District→Block)`);
+    if (result.length > 0) {
+      console.log(`   First ID: ${result[0].id}, Last ID: ${result[result.length - 1].id}`);
+    }
+    
+    return result;
   }
 
   async findByBlockForExport(block: string): Promise<Registration[]> {
@@ -339,9 +347,10 @@ export class RegistrationsService {
       where: { block },
       relations: ['checkIns'],
       order: { 
-        district: 'ASC',
-        block: 'ASC',
-        name: 'ASC',
+        id: 'ASC',        // ⭐ 1st: ID (prevents repetition)
+        district: 'ASC',  // ⭐ 2nd: District
+        block: 'ASC',     // ⭐ 3rd: Block
+        name: 'ASC',      // 4th: Name
       },
     });
   }
@@ -350,9 +359,10 @@ export class RegistrationsService {
     return this.registrationRepository.find({
       relations: ['checkIns'],
       order: { 
-        district: 'ASC',
-        block: 'ASC',
-        name: 'ASC',
+        id: 'ASC',        // ⭐ 1st: ID (prevents repetition)
+        district: 'ASC',  // ⭐ 2nd: District
+        block: 'ASC',     // ⭐ 3rd: Block
+        name: 'ASC',      // 4th: Name
       },
     });
   }
@@ -502,46 +512,42 @@ export class RegistrationsService {
   }
 
   async update(id: string, dto: UpdateRegistrationDto): Promise<Registration> {
-  const registration = await this.registrationRepository.findOne({
-    where: { id },
-  });
-
-  if (!registration) {
-    throw new NotFoundException('Registration not found');
-  }
-
-  // Check mobile uniqueness if being updated
-  if (dto.mobile && dto.mobile !== registration.mobile) {
-    const existingMobile = await this.registrationRepository.findOne({
-      where: { mobile: dto.mobile },
+    const registration = await this.registrationRepository.findOne({
+      where: { id },
     });
-    if (existingMobile) {
-      throw new ConflictException('Mobile number already registered');
+
+    if (!registration) {
+      throw new NotFoundException('Registration not found');
     }
-  }
 
-  // Check aadhaar uniqueness if being updated
-  if (dto.aadhaarOrId && dto.aadhaarOrId !== registration.aadhaarOrId) {
-    const existingAadhaar = await this.registrationRepository.findOne({
-      where: { aadhaarOrId: dto.aadhaarOrId },
-    });
-    if (existingAadhaar) {
-      throw new ConflictException('Aadhaar/ID already registered');
+    if (dto.mobile && dto.mobile !== registration.mobile) {
+      const existingMobile = await this.registrationRepository.findOne({
+        where: { mobile: dto.mobile },
+      });
+      if (existingMobile) {
+        throw new ConflictException('Mobile number already registered');
+      }
     }
+
+    if (dto.aadhaarOrId && dto.aadhaarOrId !== registration.aadhaarOrId) {
+      const existingAadhaar = await this.registrationRepository.findOne({
+        where: { aadhaarOrId: dto.aadhaarOrId },
+      });
+      if (existingAadhaar) {
+        throw new ConflictException('Aadhaar/ID already registered');
+      }
+    }
+
+    Object.assign(registration, dto);
+
+    const updated = await this.registrationRepository.save(registration);
+
+    if (registration.qrCode) {
+      this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
+        console.error('Cache invalidation failed:', err);
+      });
+    }
+
+    return updated;
   }
-
-  // Update only provided fields
-  Object.assign(registration, dto);
-
-  const updated = await this.registrationRepository.save(registration);
-
-  // Invalidate cache
-  if (registration.qrCode) {
-    this.cacheService.invalidateRegistration(registration.qrCode).catch(err => {
-      console.error('Cache invalidation failed:', err);
-    });
-  }
-
-  return updated;
-}
 }

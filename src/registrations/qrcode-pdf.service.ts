@@ -40,7 +40,7 @@ export class QRCodePDFService {
    */
   async generateQRCodePDF(
     registrations: Registration[],
-    startIndex: number = 1 // ✅ Added start index parameter
+    startIndex: number = 1
   ): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -127,7 +127,7 @@ export class QRCodePDFService {
     startRange: number,
     endRange: number
   ): Promise<Buffer> {
-    const start = Math.max(0, startRange - 1); // Convert to 0-indexed
+    const start = Math.max(0, startRange - 1);
     const end = Math.min(registrations.length, endRange);
     
     if (start >= registrations.length || start >= end) {
