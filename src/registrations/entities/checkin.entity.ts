@@ -3,7 +3,6 @@ import {
   PrimaryGeneratedColumn, 
   Column, 
   CreateDateColumn,
-  UpdateDateColumn,
   ManyToOne,
   JoinColumn,
   Index 
@@ -11,46 +10,52 @@ import {
 import { Registration } from './registrations.entity';
 
 @Entity('check_ins')
-@Index(['registrationId', 'type', 'checkInDate'])
-@Index(['checkInDate'])
+@Index(['registrationId', 'type', 'checkInDate']) // Composite index for fast lookups
+@Index(['checkInDate']) // Date-only index for daily queries
+@Index(['registrationId']) // FK index
 export class CheckIn {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar' })
+  @Column({ 
+    type: 'varchar',
+    length: 20,
+  })
   type: 'entry' | 'lunch' | 'dinner' | 'session';
 
   @Column({ type: 'uuid' })
-  @Index()
   registrationId: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, length: 100 })
   scannedBy?: string;
 
-  // ✅ NEW: Which day is this check-in for?
-  @Column({ type: 'date' })
-  @Index()
-  checkInDate: Date;
 
+ @Column({ type: 'date', nullable: false })
+checkInDate: Date;
+
+  // ✅ Behalf tracking
   @Column({ type: 'boolean', default: false })
   wasBehalf: boolean;
 
-  // ✅ NEW: Edit tracking
+  // ✅ Edit tracking
   @Column({ type: 'boolean', default: false })
   wasEdited: boolean;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'varchar', length: 20, nullable: true })
   originalType?: 'entry' | 'lunch' | 'dinner' | 'session';
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, length: 100 })
   editedBy?: string;
 
   @Column({ type: 'timestamp', nullable: true })
   editedAt?: Date;
 
-  @CreateDateColumn()
+  // ✅ When was this check-in actually scanned?
+  // Stored as TIMESTAMP for precise timing
+  @CreateDateColumn({ type: 'timestamp' })
   scannedAt: Date;
 
+  // ✅ Relation to farmer
   @ManyToOne(() => Registration, (registration) => registration.checkIns, {
     onDelete: 'CASCADE'
   })

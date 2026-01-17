@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm'; // ← Add Between
+import { Repository } from 'typeorm';
 import { Registration } from '../registrations/entities/registrations.entity';
 import { CheckIn } from '../registrations/entities/checkin.entity';
 import { GuestPass } from '../guest-passes/entities/guest-pass.entity';
@@ -34,18 +34,34 @@ export class UniversalCheckinController {
   ) {}
 
   /**
-   * ✅ FIXED: Get today's date as Date object (midnight start)
+   * ✅ Get today's date as YYYY-MM-DD string (SERVER TIMEZONE)
    */
-  private getTodayDateStart(): Date {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return today;
+  private getTodayDateString(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dateString = `${year}-${month}-${day}`;
+    
+    this.logger.log(`📅 Server Date: ${dateString}`);
+    this.logger.log(`📅 Server Time: ${now.toISOString()}`);
+    
+    return dateString;
   }
 
   /**
-   * ✅ FIXED: Get tomorrow's date (end of today)
+   * ✅ Get today's start (00:00:00)
    */
-  private getTodayDateEnd(): Date {
+  private getTodayStart(): Date {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }
+
+  /**
+   * ✅ Get tomorrow's start (end of today)
+   */
+  private getTomorrowStart(): Date {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
@@ -53,27 +69,28 @@ export class UniversalCheckinController {
   }
 
   /**
-   * Get today's date string for display (YYYY-MM-DD)
+   * ✅ Convert YYYY-MM-DD string to Date object (start of that day)
    */
-  private getTodayDateString(): string {
-    return new Date().toISOString().split('T')[0];
+  private dateStringToDate(dateString: string): Date {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
   }
 
   /**
-   * ✅ FIXED: Get today's check-in status for a farmer using date range
+   * ✅ Get today's check-ins for a farmer (FIXED - uses QueryBuilder)
    */
   private async getFarmerTodayStatus(farmerId: string) {
-    const todayStart = this.getTodayDateStart();
-    const todayEnd = this.getTodayDateEnd();
+    const todayDateString = this.getTodayDateString();
 
-    this.logger.log(`Checking farmer ${farmerId} for date range: ${todayStart.toISOString()} - ${todayEnd.toISOString()}`);
+    this.logger.log(`Checking farmer ${farmerId}`);
+    this.logger.log(`Looking for check-ins on: ${todayDateString}`);
 
-    const checkIns = await this.checkInRepository.find({
-      where: {
-        registrationId: farmerId,
-        checkInDate: Between(todayStart, todayEnd), // ✅ Proper date filtering
-      },
-    });
+    const checkIns = await this.checkInRepository
+      .createQueryBuilder('checkIn')
+      .where('checkIn.registrationId = :farmerId', { farmerId })
+      .andWhere('checkIn.checkInDate = :today', { today: todayDateString })
+      .orderBy('checkIn.scannedAt', 'DESC')
+      .getMany();
 
     this.logger.log(`Found ${checkIns.length} check-ins for today`);
 
@@ -87,18 +104,36 @@ export class UniversalCheckinController {
   }
 
   /**
-   * ✅ FIXED: Get today's check-in status for a guest using date range
+   * ✅ Get ALL check-ins for a farmer (for history display)
    */
-  private async getGuestTodayStatus(guestId: string) {
-    const todayStart = this.getTodayDateStart();
-    const todayEnd = this.getTodayDateEnd();
-
-    const checkIns = await this.guestCheckInRepository.find({
+  private async getAllFarmerCheckIns(farmerId: string) {
+    return await this.checkInRepository.find({
       where: {
-        guestPassId: guestId,
-        checkInDate: Between(todayStart, todayEnd), // ✅ Proper date filtering
+        registrationId: farmerId,
+      },
+      order: {
+        scannedAt: 'DESC',
       },
     });
+  }
+
+  /**
+   * ✅ Get today's check-ins for a guest (FIXED - uses QueryBuilder)
+   */
+  private async getGuestTodayStatus(guestId: string) {
+    const todayDateString = this.getTodayDateString();
+
+    this.logger.log(`Checking guest ${guestId}`);
+    this.logger.log(`Looking for check-ins on: ${todayDateString}`);
+
+    const checkIns = await this.guestCheckInRepository
+      .createQueryBuilder('checkIn')
+      .where('checkIn.guestPassId = :guestId', { guestId })
+      .andWhere('checkIn.checkInDate = :today', { today: todayDateString })
+      .orderBy('checkIn.scannedAt', 'DESC')
+      .getMany();
+
+    this.logger.log(`Found ${checkIns.length} check-ins for today`);
 
     return {
       hasEntry: checkIns.some(c => c.type === 'entry'),
@@ -109,14 +144,42 @@ export class UniversalCheckinController {
     };
   }
 
-  // ✅ LOOKUP ENDPOINT (Gets today's status)
+  /**
+   * ✅ Get ALL check-ins for a guest (for history display)
+   */
+  private async getAllGuestCheckIns(guestId: string) {
+    return await this.guestCheckInRepository.find({
+      where: {
+        guestPassId: guestId,
+      },
+      order: {
+        scannedAt: 'DESC',
+      },
+    });
+  }
+
+  /**
+   * ✅ Format Date to YYYY-MM-DD string for response
+   */
+  private formatDateForResponse(date: Date): string {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // ============================================
+  // LOOKUP ENDPOINT
+  // ============================================
   @Post(':qrCode/lookup')
   @ApiOperation({ 
     summary: 'Lookup attendee by QR code',
-    description: 'Returns attendee info with TODAY\'s check-in status'
+    description: 'Returns attendee info with TODAY\'s check-in status and ALL historical check-ins'
   })
   async universalLookup(@Param('qrCode') qrCode: string) {
-    this.logger.log(`🔍 Lookup: ${qrCode} on ${this.getTodayDateString()}`);
+    const currentDate = this.getTodayDateString();
+    this.logger.log(`🔍 Lookup: ${qrCode} on ${currentDate}`);
 
     // Try farmer first
     const farmer = await this.registrationRepository.findOne({
@@ -124,7 +187,11 @@ export class UniversalCheckinController {
     });
     
     if (farmer) {
-      const status = await this.getFarmerTodayStatus(farmer.id);
+      const todayStatus = await this.getFarmerTodayStatus(farmer.id);
+      const allCheckIns = await this.getAllFarmerCheckIns(farmer.id);
+      
+      this.logger.log(`✅ Farmer found: ${farmer.name}`);
+      this.logger.log(`📊 Today's status: Entry=${todayStatus.hasEntry}, Lunch=${todayStatus.hasLunch}, Dinner=${todayStatus.hasDinner}, Session=${todayStatus.hasSession}`);
       
       return {
         success: true,
@@ -145,24 +212,25 @@ export class UniversalCheckinController {
           behalfMobile: farmer.behalfMobile,
           behalfGender: farmer.behalfGender,
           isBehalfAttending: farmer.isBehalfAttending,
-          // ✅ TODAY'S STATUS
+          // ✅ TODAY'S STATUS (date-aware)
           hasCheckedIn: {
-            entry: status.hasEntry,
-            lunch: status.hasLunch,
-            dinner: status.hasDinner,
-            session: status.hasSession,
+            entry: todayStatus.hasEntry,
+            lunch: todayStatus.hasLunch,
+            dinner: todayStatus.hasDinner,
+            session: todayStatus.hasSession,
           },
-          todaysCheckIns: status.checkIns.map(c => ({
+          // ✅ ALL CHECK-INS (with dates for frontend filtering)
+          todaysCheckIns: allCheckIns.map(c => ({
             id: c.id,
             type: c.type,
-            scannedAt: c.scannedAt,
+            scannedAt: c.scannedAt.toISOString(),
             scannedBy: c.scannedBy,
             wasBehalf: c.wasBehalf,
             wasEdited: c.wasEdited,
             originalType: c.originalType,
-            checkInDate: c.checkInDate,
+            checkInDate: this.formatDateForResponse(c.checkInDate), // ✅ YYYY-MM-DD string
           })),
-          currentDate: this.getTodayDateString(), // ✅ For debugging
+          currentDate: currentDate, // ✅ Always fresh server date
         },
       };
     }
@@ -173,7 +241,11 @@ export class UniversalCheckinController {
     });
     
     if (guest) {
-      const status = await this.getGuestTodayStatus(guest.id);
+      const todayStatus = await this.getGuestTodayStatus(guest.id);
+      const allCheckIns = await this.getAllGuestCheckIns(guest.id);
+      
+      this.logger.log(`✅ Guest found: ${guest.name || guest.category}`);
+      this.logger.log(`📊 Today's status: Entry=${todayStatus.hasEntry}, Lunch=${todayStatus.hasLunch}, Dinner=${todayStatus.hasDinner}, Session=${todayStatus.hasSession}`);
       
       return {
         success: true,
@@ -188,23 +260,24 @@ export class UniversalCheckinController {
           qrCode: guest.qrCode,
           isAssigned: guest.isAssigned,
           sequenceNumber: guest.sequenceNumber,
-          // ✅ TODAY'S STATUS
+          // ✅ TODAY'S STATUS (date-aware)
           hasCheckedIn: {
-            entry: status.hasEntry,
-            lunch: status.hasLunch,
-            dinner: status.hasDinner,
-            session: status.hasSession,
+            entry: todayStatus.hasEntry,
+            lunch: todayStatus.hasLunch,
+            dinner: todayStatus.hasDinner,
+            session: todayStatus.hasSession,
           },
-          todaysCheckIns: status.checkIns.map(c => ({
+          // ✅ ALL CHECK-INS (with dates for frontend filtering)
+          todaysCheckIns: allCheckIns.map(c => ({
             id: c.id,
             type: c.type,
-            scannedAt: c.scannedAt,
+            scannedAt: c.scannedAt.toISOString(),
             scannedBy: c.scannedBy,
             wasEdited: c.wasEdited,
             originalType: c.originalType,
-            checkInDate: c.checkInDate,
+            checkInDate: this.formatDateForResponse(c.checkInDate), // ✅ YYYY-MM-DD string
           })),
-          currentDate: this.getTodayDateString(), // ✅ For debugging
+          currentDate: currentDate, // ✅ Always fresh server date
         },
       };
     }
@@ -212,23 +285,26 @@ export class UniversalCheckinController {
     throw new NotFoundException('QR code not found');
   }
 
-  // ✅ CHECK-IN ENDPOINT (Creates check-in for TODAY)
+  // ============================================
+  // CHECK-IN ENDPOINT
+  // ============================================
   @Post(':qrCode')
   @ApiOperation({ 
     summary: 'Universal check-in',
-    description: 'Creates check-in for TODAY. Allows daily repeats.'
+    description: 'Creates check-in for TODAY. Prevents duplicates per day. Allows daily repeats.'
   })
   async universalCheckIn(
     @Param('qrCode') qrCode: string,
     @Body() checkInDto: CheckInDto,
   ) {
-    this.logger.log(`📝 Check-in: ${qrCode} - ${checkInDto.type} on ${this.getTodayDateString()}`);
+    const currentDate = this.getTodayDateString();
+    this.logger.log(`📝 Check-in: ${qrCode} - ${checkInDto.type} on ${currentDate}`);
 
     if (!['entry', 'lunch', 'dinner', 'session'].includes(checkInDto.type)) {
       throw new BadRequestException('Invalid check-in type');
     }
 
-    const todayDate = this.getTodayDateStart(); // ✅ Actual Date object
+    const todayDate = this.dateStringToDate(currentDate); // ✅ Date object for today
 
     // Validate behalf data
     if (checkInDto.wasBehalf) {
@@ -247,7 +323,10 @@ export class UniversalCheckinController {
     if (farmer) {
       const status = await this.getFarmerTodayStatus(farmer.id);
 
-      // ✅ VALIDATION: Entry must be done first (TODAY)
+      this.logger.log(`👤 Farmer: ${farmer.name}`);
+      this.logger.log(`📊 Current status: Entry=${status.hasEntry}, Lunch=${status.hasLunch}, Dinner=${status.hasDinner}, Session=${status.hasSession}`);
+
+      // ✅ RULE: Entry must be done first TODAY
       if (checkInDto.type !== 'entry' && !status.hasEntry) {
         throw new BadRequestException(
           'Entry check-in must be completed first today'
@@ -262,15 +341,17 @@ export class UniversalCheckinController {
         (checkInDto.type === 'session' && status.hasSession);
 
       if (alreadyCheckedIn) {
+        this.logger.warn(`⚠️ Already checked in for ${checkInDto.type} today`);
         return {
           success: false,
-          message: `Already checked in for ${checkInDto.type} today`,
+          message: `Already checked in for ${checkInDto.type} today (${currentDate})`,
           alreadyCheckedIn: true,
           type: 'farmer',
           data: {
             id: farmer.id,
             name: farmer.name,
             qrCode: farmer.qrCode,
+            currentDate: currentDate,
             hasCheckedIn: {
               entry: status.hasEntry,
               lunch: status.hasLunch,
@@ -288,32 +369,34 @@ export class UniversalCheckinController {
         farmer.behalfGender = checkInDto.behalfGender;
         farmer.isBehalfAttending = true;
         await this.registrationRepository.save(farmer);
+        this.logger.log(`👥 Behalf info updated: ${checkInDto.behalfName}`);
       }
 
-      // ✅ Create check-in for TODAY with proper Date object
+      // ✅ Create check-in for TODAY
       const checkIn = this.checkInRepository.create({
         type: checkInDto.type,
         registrationId: farmer.id,
         scannedBy: checkInDto.scannedBy,
         wasBehalf: checkInDto.wasBehalf || false,
-        checkInDate: todayDate, // ✅ Proper Date object
-        scannedAt: new Date(),
+        checkInDate: todayDate, // ✅ Date object (00:00:00 of today)
+        scannedAt: new Date(), // ✅ Current timestamp
       });
 
       await this.checkInRepository.save(checkIn);
+      this.logger.log(`✅ Check-in created: ID=${checkIn.id}, Date=${this.formatDateForResponse(checkIn.checkInDate)}`);
 
       // Get updated status
       const updatedStatus = await this.getFarmerTodayStatus(farmer.id);
 
       return {
         success: true,
-        message: `${checkInDto.type.toUpperCase()} check-in successful`,
+        message: `${checkInDto.type.toUpperCase()} check-in successful for ${currentDate}`,
         type: 'farmer',
         data: {
           id: farmer.id,
           name: farmer.name,
           qrCode: farmer.qrCode,
-          checkInDate: this.getTodayDateString(),
+          checkInDate: currentDate,
           hasCheckedIn: {
             entry: updatedStatus.hasEntry,
             lunch: updatedStatus.hasLunch,
@@ -336,6 +419,9 @@ export class UniversalCheckinController {
 
       const status = await this.getGuestTodayStatus(guest.id);
 
+      this.logger.log(`⭐ Guest: ${guest.name || guest.category}`);
+      this.logger.log(`📊 Current status: Entry=${status.hasEntry}, Lunch=${status.hasLunch}, Dinner=${status.hasDinner}, Session=${status.hasSession}`);
+
       // Validate entry first
       if (checkInDto.type !== 'entry' && !status.hasEntry) {
         throw new BadRequestException(
@@ -351,15 +437,17 @@ export class UniversalCheckinController {
         (checkInDto.type === 'session' && status.hasSession);
 
       if (alreadyCheckedIn) {
+        this.logger.warn(`⚠️ Already checked in for ${checkInDto.type} today`);
         return {
           success: false,
-          message: `Already checked in for ${checkInDto.type} today`,
+          message: `Already checked in for ${checkInDto.type} today (${currentDate})`,
           alreadyCheckedIn: true,
           type: 'guest',
           data: {
             id: guest.id,
             name: guest.name,
             qrCode: guest.qrCode,
+            currentDate: currentDate,
             hasCheckedIn: {
               entry: status.hasEntry,
               lunch: status.hasLunch,
@@ -370,28 +458,29 @@ export class UniversalCheckinController {
         };
       }
 
-      // Create check-in with proper Date object
+      // Create check-in
       const guestCheckIn = this.guestCheckInRepository.create({
         type: checkInDto.type,
         guestPassId: guest.id,
         scannedBy: checkInDto.scannedBy,
-        checkInDate: todayDate, // ✅ Proper Date object
+        checkInDate: todayDate, // ✅ Date object
         scannedAt: new Date(),
       });
 
       await this.guestCheckInRepository.save(guestCheckIn);
+      this.logger.log(`✅ Check-in created: ID=${guestCheckIn.id}, Date=${this.formatDateForResponse(guestCheckIn.checkInDate)}`);
 
       const updatedStatus = await this.getGuestTodayStatus(guest.id);
 
       return {
         success: true,
-        message: `${checkInDto.type.toUpperCase()} check-in successful`,
+        message: `${checkInDto.type.toUpperCase()} check-in successful for ${currentDate}`,
         type: 'guest',
         data: {
           id: guest.id,
           name: guest.name,
           qrCode: guest.qrCode,
-          checkInDate: this.getTodayDateString(),
+          checkInDate: currentDate,
           hasCheckedIn: {
             entry: updatedStatus.hasEntry,
             lunch: updatedStatus.hasLunch,
@@ -405,7 +494,9 @@ export class UniversalCheckinController {
     throw new NotFoundException('QR code not found');
   }
 
-  // ✅ EDIT CHECK-IN ENDPOINT (unchanged, but can be improved similarly)
+  // ============================================
+  // EDIT CHECK-IN ENDPOINT
+  // ============================================
   @Patch('check-in/:checkInId/edit')
   @ApiOperation({ 
     summary: 'Edit check-in type',
@@ -446,6 +537,8 @@ export class UniversalCheckinController {
 
       await this.checkInRepository.save(farmerCheckIn);
 
+      this.logger.log(`✅ Check-in edited: ${farmerCheckIn.originalType || farmerCheckIn.type} -> ${editDto.newType}`);
+
       return {
         success: true,
         message: `Check-in updated from ${farmerCheckIn.originalType || farmerCheckIn.type} to ${editDto.newType}`,
@@ -484,6 +577,8 @@ export class UniversalCheckinController {
       guestCheckIn.editedAt = new Date();
 
       await this.guestCheckInRepository.save(guestCheckIn);
+
+      this.logger.log(`✅ Check-in edited: ${guestCheckIn.originalType || guestCheckIn.type} -> ${editDto.newType}`);
 
       return {
         success: true,

@@ -10,8 +10,9 @@ import {
 import { GuestPass } from './guest-pass.entity';
 
 @Entity('guest_check_ins')
-@Index(['guestPassId', 'type', 'checkInDate'])
-@Index(['checkInDate'])
+@Index(['guestPassId', 'type', 'checkInDate']) // Composite index for fast lookups
+@Index(['checkInDate']) // Date-only index for daily queries
+@Index(['guestPassId']) // FK index
 export class GuestCheckIn {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -22,36 +23,41 @@ export class GuestCheckIn {
   })
   type: 'entry' | 'lunch' | 'dinner' | 'session';
 
-  @Column({ nullable: true, length: 50 })
+  @Column({ nullable: true, length: 100 })
   scannedBy: string;
 
-  // ✅ NEW: Which day is this check-in for?
+  // ✅ CRITICAL: Which day is this check-in for?
+  // Stored as DATE type (YYYY-MM-DD) in PostgreSQL
+  // This allows daily repeats - one check-in of each type per day
   @Column({ type: 'date' })
   @Index()
   checkInDate: Date;
 
-  // ✅ NEW: Edit tracking
+  // ✅ Edit tracking
   @Column({ type: 'boolean', default: false })
   wasEdited: boolean;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'varchar', length: 20, nullable: true })
   originalType?: 'entry' | 'lunch' | 'dinner' | 'session';
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, length: 100 })
   editedBy?: string;
 
   @Column({ type: 'timestamp', nullable: true })
   editedAt?: Date;
 
-  @CreateDateColumn()
+  // ✅ When was this check-in actually scanned?
+  // Stored as TIMESTAMP for precise timing
+  @CreateDateColumn({ type: 'timestamp' })
   scannedAt: Date;
 
+  // ✅ Relation to guest pass
   @ManyToOne(() => GuestPass, (guestPass) => guestPass.checkIns, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'guestPassId' })
   guestPass: GuestPass;
 
-  @Column()
+  @Column({ type: 'uuid' })
   guestPassId: string;
 }
