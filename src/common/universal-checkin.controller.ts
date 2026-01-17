@@ -160,13 +160,26 @@ export class UniversalCheckinController {
 
   /**
    * ✅ Format Date to YYYY-MM-DD string for response
+   * Handles both Date objects and date strings
    */
-  private formatDateForResponse(date: Date): string {
+  private formatDateForResponse(date: Date | string): string {
     if (!date) return '';
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    
+    // If it's already a string in YYYY-MM-DD format, return it
+    if (typeof date === 'string') {
+      return date;
+    }
+    
+    // If it's a Date object, format it
+    try {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return String(date);
+    }
   }
 
   // ============================================
