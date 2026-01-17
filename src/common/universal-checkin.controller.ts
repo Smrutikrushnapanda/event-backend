@@ -36,27 +36,42 @@ export class UniversalCheckinController {
   /**
    * ✅ Get today's date as YYYY-MM-DD string (SERVER TIMEZONE)
    */
-  private getTodayDateString(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const dateString = `${year}-${month}-${day}`;
-    
-    this.logger.log(`📅 Server Date: ${dateString}`);
-    this.logger.log(`📅 Server Time: ${now.toISOString()}`);
-    
-    return dateString;
-  }
+private getTodayDateString(): string {
+  // Get current date in India timezone (Asia/Kolkata)
+  const now = new Date();
+  
+  // Use Intl API to get date parts in India timezone
+  const formatter = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(now);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  
+  const dateString = `${year}-${month}-${day}`;
+  
+  this.logger.log(`📅 Server Date (India): ${dateString}`);
+  this.logger.log(`📅 Server Time (UTC): ${now.toISOString()}`);
+  
+  return dateString;
+}
 
   /**
    * ✅ Get today's start (00:00:00)
    */
-  private getTodayStart(): Date {
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
+private getTodayStart(): Date {
+  // Get current date in India timezone
+  const dateString = this.getTodayDateString(); // YYYY-MM-DD in IST
+  const [year, month, day] = dateString.split('-').map(Number);
+  
+  // Create date at midnight IST
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
 
   /**
    * ✅ Get tomorrow's start (end of today)
