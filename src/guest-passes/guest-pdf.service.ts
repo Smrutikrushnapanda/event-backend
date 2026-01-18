@@ -42,12 +42,12 @@ export class GuestPDFService {
         const pageHeight = 842;
         const margin = 20;
 
-        // QR code dimensions (8mm = 22.68 points)
-        const qrSize = 22.68;
-        const labelWidth = 105;
-        const labelHeight = 55;
-        const spacingX = 5;
-        const spacingY = 5;
+        // QR code dimensions (smaller size)
+        const qrSize = 28; // Reduced from 35
+        const labelWidth = 110;
+        const labelHeight = 50;
+        const spacingX = 3;
+        const spacingY = 8; // Increased from 3 (more gap between rows)
 
         // Calculate grid layout
         const cols = Math.floor(
@@ -97,28 +97,38 @@ export class GuestPDFService {
             const base64Data = qrCodeDataUrl.split(',')[1];
             const qrImageBuffer = Buffer.from(base64Data, 'base64');
 
-            // Draw border
-            doc.rect(labelX, labelY, labelWidth, labelHeight).stroke();
+            // No border - removed for cleaner look
 
-            // QR code on the left
+            // ✅ QR code on the LEFT
             const qrX = labelX + 3;
-            const qrY = labelY + (labelHeight - qrSize) / 2;
+            const qrY = labelY + 5;
 
             doc.image(qrImageBuffer, qrX, qrY, {
               width: qrSize,
               height: qrSize,
             });
 
-            // Text on the right
-            const textX = qrX + qrSize + 4;
-            const textY = labelY + 16;
-            const textWidth = labelWidth - qrSize - 10;
+            // ✅ QR Code text BELOW the QR image
+            const qrTextY = qrY + qrSize + 2;
+            doc
+              .fontSize(5)
+              .font('Helvetica')
+              .text(pass.qrCode, qrX, qrTextY, {
+                width: qrSize,
+                align: 'center',
+                lineBreak: false,
+              });
 
-            // ✅ Display name or category (with fallback)
+            // ✅ Text on the RIGHT side
+            const textX = qrX + qrSize + 8; // 8pt gap from QR
+            let textY = labelY + 8;
+            const textWidth = labelWidth - qrSize - 12;
+
+            // ✅ Display Name
             const displayName = pass.name || `${pass.category} Guest`;
 
             doc
-              .fontSize(6)
+              .fontSize(7)
               .font('Helvetica-Bold')
               .text(displayName, textX, textY, {
                 width: textWidth,
@@ -126,17 +136,25 @@ export class GuestPDFService {
                 lineBreak: true,
               });
 
-            // QR Code at bottom
-            const qrTextY = labelY + labelHeight - 18;
-            doc
-              .fontSize(5)
-              .font('Helvetica')
-              .text(pass.qrCode, textX, qrTextY, {
-                width: textWidth,
-                align: 'left',
-                lineBreak: false,
-                ellipsis: true,
-              });
+            // Calculate height of name text
+            const nameHeight = doc.heightOfString(displayName, {
+              width: textWidth,
+              lineBreak: true,
+            });
+
+            textY += nameHeight + 4; // 4pt gap between name and designation
+
+            // ✅ Display Designation (if available)
+            if (pass.designation) {
+              doc
+                .fontSize(6)
+                .font('Helvetica')
+                .text(pass.designation, textX, textY, {
+                  width: textWidth,
+                  align: 'left',
+                  lineBreak: true,
+                });
+            }
 
             currentLabel++;
 

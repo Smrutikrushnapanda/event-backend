@@ -93,8 +93,8 @@ export class GuestPassesController {
   }
 
   @Get('export/qr-pdf')
-  @ApiOperation({ summary: '🎫 Export QR code labels PDF' })
-  async exportQRPDF(@Res() res: Response) {
+  @ApiOperation({ summary: '🎫 Export QR code labels PDF for ALL passes' })
+  async exportAllQRPDF(@Res() res: Response) {
     try {
       const passes = await this.guestPassesService.getAllPassesForExport();
       
@@ -107,7 +107,46 @@ export class GuestPassesController {
 
       const pdfBuffer = await this.pdfService.generateQRCodePDF(passes);
 
-      const filename = `Guest_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `Guest_All_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error('QR PDF export error:', error);
+      res.status(500).json({ 
+        error: 'Failed to generate QR PDF',
+        message: error.message
+      });
+    }
+  }
+
+  @Get('export/qr-pdf/:category')
+  @ApiOperation({ summary: '🎫 Export QR code labels PDF for specific category' })
+  @ApiParam({
+    name: 'category',
+    required: true,
+    enum: PassCategory,
+    description: 'Category to export (DELEGATE, VVIP, VISITOR)',
+  })
+  async exportQRPDF(
+    @Res() res: Response,
+    @Param('category') category: PassCategory,
+  ) {
+    try {
+      // ✅ Get passes for the specified category
+      const passes = await this.guestPassesService.getPassesByCategoryForExport(category);
+      
+      if (passes.length === 0) {
+        return res.status(404).json({ 
+          error: 'No guest passes found',
+          message: `No ${category} passes found. Please generate passes first.`
+        });
+      }
+
+      const pdfBuffer = await this.pdfService.generateQRCodePDF(passes);
+
+      const filename = `Guest_${category}_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

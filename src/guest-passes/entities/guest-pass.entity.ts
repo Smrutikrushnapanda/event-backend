@@ -42,10 +42,10 @@ export class GuestPass {
   mobile?: string;
 
   // ✅ NEW: Designation field
-  @Column({ nullable: true, length: 100 })
+  @Column({ nullable: true, length: 500 })
   designation?: string;
 
-  @Column({ nullable: true, length: 100 })
+  @Column({ nullable: true, length: 500 })
   assignedBy?: string;
 
   @Column({ nullable: true })
