@@ -8,6 +8,7 @@ import { VolunteersModule } from './volunteers/volunteers.module';
 import { AuthModule } from './auth/auth.module';
 import { GuestPassesModule } from './guest-passes/guest-passes.module';
 import { UniversalCheckinModule } from './common/universal-checkin.module';
+import { FeedbackModule } from './feedback/feedback.module';
 
 @Module({
   imports: [
@@ -35,7 +36,8 @@ import { UniversalCheckinModule } from './common/universal-checkin.module';
     VolunteersModule,
     AuthModule,
     GuestPassesModule,
-    UniversalCheckinModule
+    UniversalCheckinModule,
+    FeedbackModule
   ],
   controllers: [AppController],
   providers: [AppService],
