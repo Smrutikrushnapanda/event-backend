@@ -47,7 +47,7 @@ export class GuestPDFService {
         const labelWidth = 110;
         const labelHeight = 50;
         const spacingX = 3;
-        const spacingY = 8; // Increased from 3 (more gap between rows)
+        const spacingY = 9; // Increased from 3 (more gap between rows)
 
         // Calculate grid layout
         const cols = Math.floor(
@@ -108,16 +108,7 @@ export class GuestPDFService {
               height: qrSize,
             });
 
-            // ✅ QR Code text BELOW the QR image
-            const qrTextY = qrY + qrSize + 2;
-            doc
-              .fontSize(5)
-              .font('Helvetica')
-              .text(pass.qrCode, qrX, qrTextY, {
-                width: qrSize,
-                align: 'center',
-                lineBreak: false,
-              });
+            // --- [REMOVED] QR Text Code Block was here ---
 
             // ✅ Text on the RIGHT side
             const textX = qrX + qrSize + 8; // 8pt gap from QR
