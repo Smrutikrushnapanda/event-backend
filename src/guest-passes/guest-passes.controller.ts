@@ -8,7 +8,11 @@ import {
   Res,
   HttpCode,
   HttpStatus,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -16,8 +20,10 @@ import {
   ApiParam,
   ApiQuery,
   ApiBody,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
+import * as XLSX from 'xlsx';
 import { GuestPassesService } from './guest-passes.service';
 import { GuestExportService } from './guest-export.service';
 import { GuestPDFService } from './guest-pdf.service';
@@ -25,6 +31,14 @@ import { GeneratePassesDto } from './dto/generate-passes.dto';
 import { AssignDetailsDto } from './dto/assign-details.dto';
 import { GuestCheckInDto } from './dto/guest-checkin.dto';
 import { PassCategory } from './enums/pass-category.enum';
+
+// ✅ Define inline interface to avoid unused import warning
+interface BulkAssignmentItem {
+  qrCode: string;
+  name: string;
+  mobile?: string;
+  designation?: string;
+}
 
 @ApiTags('Guest Passes')
 @Controller('guest-passes')
@@ -36,12 +50,11 @@ export class GuestPassesController {
   ) {}
 
   // ============================================
-  // EXPORT ROUTES - MUST COME FIRST!
+  // EXPORT ROUTES
   // ============================================
 
   @Get('export/csv')
   @ApiOperation({ summary: '📄 Export all guest passes to CSV' })
-  @ApiResponse({ status: 200, description: 'CSV file generated' })
   async exportToCSV(@Res() res: Response) {
     try {
       const passes = await this.guestPassesService.getAllPassesForExport();
@@ -60,7 +73,6 @@ export class GuestPassesController {
 
   @Get('export/excel')
   @ApiOperation({ summary: '📊 Export all guest passes to Excel with QR codes' })
-  @ApiResponse({ status: 200, description: 'Excel file generated' })
   async exportToExcel(@Res() res: Response) {
     try {
       const passes = await this.guestPassesService.getAllPassesForExport();
@@ -80,104 +92,37 @@ export class GuestPassesController {
     }
   }
 
-@Get('export/qr-pdf')
-@ApiOperation({ summary: '🎫 Export QR code labels PDF (10mm x 10mm)' })
-@ApiResponse({ status: 200, description: 'PDF with QR labels generated' })
-async exportQRPDF(@Res() res: Response) {
-  try {
-    console.log('📥 Fetching guest passes for PDF export...');
-    const passes = await this.guestPassesService.getAllPassesForExport();
-    
-    console.log(`📊 Found ${passes.length} guest passes`);
-    
-    if (passes.length === 0) {
-      return res.status(404).json({ 
-        error: 'No guest passes found',
-        message: 'Please generate guest passes first using POST /guest-passes/generate'
-      });
-    }
-
-    console.log('📄 Generating PDF...');
-    const pdfBuffer = await this.pdfService.generateQRCodePDF(passes);
-
-    const filename = `Guest_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(pdfBuffer);
-    
-    console.log('✅ PDF sent successfully');
-  } catch (error) {
-    console.error('❌ QR PDF export error:', error);
-    res.status(500).json({ 
-      error: 'Failed to generate QR PDF',
-      message: error.message || 'Unknown error',
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-}
-
-  @Get('export/excel/:category')
-  @ApiOperation({ summary: '📊 Export passes by category to Excel' })
-  @ApiParam({
-    name: 'category',
-    enum: PassCategory,
-    example: 'DELEGATE',
-  })
-  @ApiResponse({ status: 200, description: 'Excel file generated' })
-  async exportCategoryToExcel(
-    @Param('category') category: PassCategory,
-    @Res() res: Response,
-  ) {
+  @Get('export/qr-pdf')
+  @ApiOperation({ summary: '🎫 Export QR code labels PDF' })
+  async exportQRPDF(@Res() res: Response) {
     try {
-      const passes =
-        await this.guestPassesService.getPassesByCategoryForExport(category);
-      const excelBuffer = await this.exportService.generateExcel(passes);
+      const passes = await this.guestPassesService.getAllPassesForExport();
+      
+      if (passes.length === 0) {
+        return res.status(404).json({ 
+          error: 'No guest passes found',
+          message: 'Please generate guest passes first'
+        });
+      }
 
-      const filename = `${category}_Passes_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-      res.setHeader(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(excelBuffer);
-    } catch (error) {
-      console.error('Category Excel export error:', error);
-      res.status(500).json({ error: 'Failed to generate Excel' });
-    }
-  }
-
-  @Get('export/qr-pdf/:category')
-  @ApiOperation({ summary: '🎫 Export QR labels PDF by category' })
-  @ApiParam({
-    name: 'category',
-    enum: PassCategory,
-    example: 'DELEGATE',
-  })
-  @ApiResponse({ status: 200, description: 'PDF generated' })
-  async exportCategoryQRPDF(
-    @Param('category') category: PassCategory,
-    @Res() res: Response,
-  ) {
-    try {
-      const passes =
-        await this.guestPassesService.getPassesByCategoryForExport(category);
       const pdfBuffer = await this.pdfService.generateQRCodePDF(passes);
 
-      const filename = `${category}_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `Guest_QR_Codes_${new Date().toISOString().split('T')[0]}.pdf`;
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(pdfBuffer);
     } catch (error) {
-      console.error('Category QR PDF export error:', error);
-      res.status(500).json({ error: 'Failed to generate QR PDF' });
+      console.error('QR PDF export error:', error);
+      res.status(500).json({ 
+        error: 'Failed to generate QR PDF',
+        message: error.message
+      });
     }
   }
 
   // ============================================
-  // STATISTICS ROUTE - BEFORE PARAMETERIZED ROUTES
+  // STATISTICS ROUTE
   // ============================================
 
   @Get('statistics')
@@ -186,11 +131,6 @@ async exportQRPDF(@Res() res: Response) {
     name: 'includeBreakdown',
     required: false,
     type: Boolean,
-    description: 'Include category-wise breakdown',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Returns comprehensive statistics',
   })
   async getStatistics(@Query('includeBreakdown') includeBreakdown?: string) {
     const includeBreak = includeBreakdown === 'true';
@@ -202,35 +142,24 @@ async exportQRPDF(@Res() res: Response) {
   // ============================================
 
   @Post('generate')
-  @ApiOperation({
-    summary: '🎫 Generate guest passes (DELEGATE/VVIP/VISITOR)',
-    description:
-      'Generate pre-numbered QR codes. Continues from last number if called again.',
-  })
+  @ApiOperation({ summary: '🎫 Generate guest passes' })
   @ApiBody({ type: GeneratePassesDto })
-  @ApiResponse({
-    status: 201,
-    description: 'Passes generated successfully',
-  })
   async generatePasses(@Body() dto: GeneratePassesDto) {
     return this.guestPassesService.generatePasses(dto);
   }
 
   @Get()
-  @ApiOperation({ summary: '📋 Get all guest passes with optional filters' })
+  @ApiOperation({ summary: '📋 Get all guest passes with filters' })
   @ApiQuery({
     name: 'category',
     required: false,
     enum: PassCategory,
-    description: 'Filter by category',
   })
   @ApiQuery({
     name: 'isAssigned',
     required: false,
     type: Boolean,
-    description: 'Filter by assignment status',
   })
-  @ApiResponse({ status: 200, description: 'Returns list of guest passes' })
   async getAllPasses(
     @Query('category') category?: PassCategory,
     @Query('isAssigned') isAssigned?: string,
@@ -249,21 +178,80 @@ async exportQRPDF(@Res() res: Response) {
   }
 
   // ============================================
-  // PARAMETERIZED ROUTES - MUST COME LAST!
+  // ✅ BULK ASSIGNMENT FROM EXCEL
+  // ============================================
+
+  @Post('bulk-assign')
+  @ApiOperation({ 
+    summary: '📤 Bulk assign details from Excel',
+    description: 'Upload Excel with columns: qrCode, name, mobile (optional), designation (optional)'
+  })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  async bulkAssign(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('assignedBy') assignedBy: string = 'Admin',
+  ) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    try {
+      // Parse Excel file
+      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+      if (data.length === 0) {
+        throw new BadRequestException('Excel file is empty');
+      }
+
+      // ✅ Validate and transform data using inline interface
+      const assignments: BulkAssignmentItem[] = data.map((row, index) => {
+        if (!row.qrCode || !row.name) {
+          throw new BadRequestException(
+            `Row ${index + 2}: qrCode and name are required`,
+          );
+        }
+
+        return {
+          qrCode: String(row.qrCode).trim(),
+          name: String(row.name).trim(),
+          mobile: row.mobile ? String(row.mobile).trim() : undefined,
+          designation: row.designation ? String(row.designation).trim() : undefined,
+        };
+      });
+
+      // ✅ Call service method with properly typed data
+      const result = await this.guestPassesService.bulkAssign({
+        assignments,
+        assignedBy,
+      });
+
+      return {
+        message: 'Bulk assignment completed',
+        total: assignments.length,
+        ...result,
+      };
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to process Excel: ${error.message}`,
+      );
+    }
+  }
+
+  // ============================================
+  // PARAMETERIZED ROUTES
   // ============================================
 
   @Post('fast-checkin/:qrCode')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: '⚡ Fast check-in for guest passes',
-    description: 'Anonymous check-in - no personal details required',
-  })
+  @ApiOperation({ summary: '⚡ Fast check-in for guest passes' })
   @ApiParam({
     name: 'qrCode',
     example: 'DELEGATE-001',
-    description: 'Guest pass QR code',
   })
-  @ApiResponse({ status: 200, description: 'Check-in processed' })
   async fastCheckIn(
     @Param('qrCode') qrCode: string,
     @Body() dto: GuestCheckInDto,
@@ -276,20 +264,10 @@ async exportQRPDF(@Res() res: Response) {
   }
 
   @Post(':qrCode/assign')
-  @ApiOperation({
-    summary: '📝 Assign name and mobile to a guest pass',
-    description: 'Add personal details to a QR code later',
-  })
+  @ApiOperation({ summary: '📝 Assign details to a guest pass' })
   @ApiParam({
     name: 'qrCode',
     example: 'DELEGATE-001',
-    description: 'Guest pass QR code',
-  })
-  @ApiResponse({ status: 200, description: 'Details assigned successfully' })
-  @ApiResponse({ status: 404, description: 'Guest pass not found' })
-  @ApiResponse({
-    status: 409,
-    description: 'Pass already assigned or mobile already used',
   })
   async assignDetails(
     @Param('qrCode') qrCode: string,
@@ -303,13 +281,7 @@ async exportQRPDF(@Res() res: Response) {
   @ApiParam({
     name: 'qrCode',
     example: 'DELEGATE-001',
-    description: 'Guest pass QR code',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'Returns guest pass with check-in history',
-  })
-  @ApiResponse({ status: 404, description: 'Guest pass not found' })
   async getByQrCode(@Param('qrCode') qrCode: string) {
     return this.guestPassesService.getByQrCode(qrCode);
   }

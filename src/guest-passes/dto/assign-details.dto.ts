@@ -1,33 +1,27 @@
-import { IsString, IsNotEmpty, Matches, Length } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AssignDetailsDto {
-  @ApiProperty({
-    description: 'Name of the person',
-    example: 'John Doe',
-  })
+  @ApiProperty({ example: 'John Doe', description: 'Full name of the guest' })
   @IsString()
   @IsNotEmpty()
-  @Length(2, 100)
   name: string;
 
-  @ApiProperty({
-    description: 'Mobile number (10 digits)',
-    example: '9876543210',
-  })
+  @ApiPropertyOptional({ example: '9876543210', description: 'Mobile number (optional)' })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @Matches(/^[6-9]\d{9}$/, {
     message: 'Mobile must be a valid 10-digit Indian number',
   })
-  mobile: string;
+  mobile?: string;
 
-  @ApiProperty({
-    description: 'Who assigned these details',
-    example: 'Admin',
-    required: false,
-  })
+  @ApiPropertyOptional({ example: 'Chief Executive Officer', description: 'Designation (optional)' })
   @IsString()
-  @IsNotEmpty()
-  assignedBy: string;
+  @IsOptional()
+  designation?: string;
+
+  @ApiPropertyOptional({ example: 'Admin', description: 'Person who assigned' })
+  @IsString()
+  @IsOptional()
+  assignedBy?: string;
 }

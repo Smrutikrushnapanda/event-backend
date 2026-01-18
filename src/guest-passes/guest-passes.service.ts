@@ -11,6 +11,7 @@ import { GuestCheckIn } from './entities/guest-checkin.entity';
 import { PassCategory, CATEGORY_PREFIXES } from './enums/pass-category.enum';
 import { GeneratePassesDto } from './dto/generate-passes.dto';
 import { AssignDetailsDto } from './dto/assign-details.dto';
+import { BulkAssignDto } from './dto/bulk-assign.dto';
 
 @Injectable()
 export class GuestPassesService {
@@ -21,9 +22,6 @@ export class GuestPassesService {
     private guestCheckInRepository: Repository<GuestCheckIn>,
   ) {}
 
-  /**
-   * Generate guest passes with sequential numbering
-   */
   async generatePasses(dto: GeneratePassesDto): Promise<{
     generated: number;
     categories: Record<string, { count: number; range: string }>;
@@ -33,7 +31,6 @@ export class GuestPassesService {
       categories: {} as Record<string, { count: number; range: string }>,
     };
 
-    // Generate DELEGATE passes
     if (dto.delegates && dto.delegates > 0) {
       const delegateResult = await this.generateCategoryPasses(
         PassCategory.DELEGATE,
@@ -43,7 +40,6 @@ export class GuestPassesService {
       result.categories.DELEGATE = delegateResult;
     }
 
-    // Generate VVIP passes
     if (dto.vvip && dto.vvip > 0) {
       const vvipResult = await this.generateCategoryPasses(
         PassCategory.VVIP,
@@ -53,7 +49,6 @@ export class GuestPassesService {
       result.categories.VVIP = vvipResult;
     }
 
-    // Generate VISITOR passes
     if (dto.visitors && dto.visitors > 0) {
       const visitorResult = await this.generateCategoryPasses(
         PassCategory.VISITOR,
@@ -66,14 +61,10 @@ export class GuestPassesService {
     return result;
   }
 
-  /**
-   * Generate passes for a specific category with auto-increment
-   */
   private async generateCategoryPasses(
     category: PassCategory,
     count: number,
   ): Promise<{ count: number; range: string }> {
-    // Find the last sequence number for this category
     const lastPass = await this.guestPassRepository.findOne({
       where: { category },
       order: { sequenceNumber: 'DESC' },
@@ -97,7 +88,6 @@ export class GuestPassesService {
       });
     }
 
-    // Batch insert
     await this.guestPassRepository.insert(passes);
 
     return {
@@ -106,9 +96,6 @@ export class GuestPassesService {
     };
   }
 
-  /**
-   * Assign name and mobile to a guest pass
-   */
   async assignDetails(
     qrCode: string,
     dto: AssignDetailsDto,
@@ -127,29 +114,97 @@ export class GuestPassesService {
       );
     }
 
-    // Check if mobile is already used
-    const existingPass = await this.guestPassRepository.findOne({
-      where: { mobile: dto.mobile },
-    });
+    // Check if mobile is already used (only if mobile is provided)
+    if (dto.mobile) {
+      const existingPass = await this.guestPassRepository.findOne({
+        where: { mobile: dto.mobile },
+      });
 
-    if (existingPass) {
-      throw new ConflictException(
-        `Mobile ${dto.mobile} is already assigned to ${existingPass.qrCode}`,
-      );
+      if (existingPass) {
+        throw new ConflictException(
+          `Mobile ${dto.mobile} is already assigned to ${existingPass.qrCode}`,
+        );
+      }
     }
 
+    // ✅ FIX: Handle null values properly
     pass.name = dto.name;
-    pass.mobile = dto.mobile;
+    pass.mobile = dto.mobile ?? undefined;
+    pass.designation = dto.designation ?? undefined;
     pass.isAssigned = true;
-    pass.assignedBy = dto.assignedBy;
+    pass.assignedBy = dto.assignedBy || 'Admin';
     pass.assignedAt = new Date();
 
     return this.guestPassRepository.save(pass);
   }
 
-  /**
-   * Fast check-in for guest passes
-   */
+  async bulkAssign(dto: BulkAssignDto): Promise<{
+    success: number;
+    failed: Array<{ qrCode: string; reason: string }>;
+  }> {
+    const result = {
+      success: 0,
+      failed: [] as Array<{ qrCode: string; reason: string }>,
+    };
+
+    for (const assignment of dto.assignments) {
+      try {
+        const pass = await this.guestPassRepository.findOne({
+          where: { qrCode: assignment.qrCode },
+        });
+
+        if (!pass) {
+          result.failed.push({
+            qrCode: assignment.qrCode,
+            reason: 'Pass not found',
+          });
+          continue;
+        }
+
+        if (pass.isAssigned) {
+          result.failed.push({
+            qrCode: assignment.qrCode,
+            reason: `Already assigned to ${pass.name}`,
+          });
+          continue;
+        }
+
+        // Check mobile uniqueness (only if provided)
+        if (assignment.mobile) {
+          const existingPass = await this.guestPassRepository.findOne({
+            where: { mobile: assignment.mobile },
+          });
+
+          if (existingPass && existingPass.qrCode !== assignment.qrCode) {
+            result.failed.push({
+              qrCode: assignment.qrCode,
+              reason: `Mobile ${assignment.mobile} already used by ${existingPass.qrCode}`,
+            });
+            continue;
+          }
+        }
+
+        // ✅ FIX: Handle null values properly
+        pass.name = assignment.name;
+        pass.mobile = assignment.mobile ?? undefined;
+        pass.designation = assignment.designation ?? undefined;
+        pass.isAssigned = true;
+        pass.assignedBy = dto.assignedBy;
+        pass.assignedAt = new Date();
+
+        await this.guestPassRepository.save(pass);
+        result.success++;
+      } catch (error) {
+        result.failed.push({
+          qrCode: assignment.qrCode,
+          reason: error.message || 'Unknown error',
+        });
+      }
+    }
+
+    return result;
+  }
+
   async fastCheckIn(
     qrCode: string,
     checkInType: 'entry' | 'lunch' | 'dinner' | 'session',
@@ -181,7 +236,6 @@ export class GuestPassesService {
       };
     }
 
-    // Create check-in record
     const checkIn = this.guestCheckInRepository.create({
       type: checkInType,
       guestPassId: pass.id,
@@ -190,7 +244,6 @@ export class GuestPassesService {
 
     await this.guestCheckInRepository.save(checkIn);
 
-    // Update pass status
     pass[checkInStatusMap[checkInType]] = true;
     await this.guestPassRepository.save(pass);
 
@@ -204,9 +257,6 @@ export class GuestPassesService {
     };
   }
 
-  /**
-   * Get pass by QR code
-   */
   async getByQrCode(qrCode: string): Promise<GuestPass> {
     const pass = await this.guestPassRepository.findOne({
       where: { qrCode },
@@ -220,9 +270,6 @@ export class GuestPassesService {
     return pass;
   }
 
-  /**
-   * Get all passes with optional filters
-   */
   async getAllPasses(filters?: {
     category?: PassCategory;
     isAssigned?: boolean;
@@ -248,9 +295,6 @@ export class GuestPassesService {
     return queryBuilder.getMany();
   }
 
-  /**
-   * Get statistics
-   */
   async getStatistics(includeBreakdown = false): Promise<any> {
     const [
       totalPasses,
@@ -284,7 +328,9 @@ export class GuestPassesService {
       totalPasses,
       totalAssigned,
       totalUnassigned,
-      assignmentPercentage: ((totalAssigned / totalPasses) * 100).toFixed(1),
+      assignmentPercentage: totalPasses > 0 
+        ? ((totalAssigned / totalPasses) * 100).toFixed(1) 
+        : '0.0',
       byCategory: {
         DELEGATE: delegateCount,
         VVIP: vvipCount,
@@ -335,9 +381,6 @@ export class GuestPassesService {
     return response;
   }
 
-  /**
-   * Get all passes for export
-   */
   async getAllPassesForExport(): Promise<GuestPass[]> {
     return this.guestPassRepository.find({
       relations: ['checkIns'],
@@ -348,9 +391,6 @@ export class GuestPassesService {
     });
   }
 
-  /**
-   * Get passes by category for export
-   */
   async getPassesByCategoryForExport(
     category: PassCategory,
   ): Promise<GuestPass[]> {
