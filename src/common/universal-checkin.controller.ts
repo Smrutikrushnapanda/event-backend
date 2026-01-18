@@ -37,10 +37,7 @@ export class UniversalCheckinController {
    * ✅ Get today's date as YYYY-MM-DD string (SERVER TIMEZONE)
    */
 private getTodayDateString(): string {
-  // Get current date in India timezone (Asia/Kolkata)
   const now = new Date();
-  
-  // Use Intl API to get date parts in India timezone
   const formatter = new Intl.DateTimeFormat('en-IN', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
