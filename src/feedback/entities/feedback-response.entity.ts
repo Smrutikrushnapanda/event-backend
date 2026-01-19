@@ -20,6 +20,9 @@ export class FeedbackResponse {
   @JoinColumn({ name: 'questionId' })
   question: FeedbackQuestion;
 
+  @Column({ type: 'varchar', length: 255, nullable: false })
+  name: string;
+
   @Column({ type: 'int', nullable: false })
   rating: number; // 1-5
 

@@ -42,12 +42,12 @@ export class GuestPDFService {
         const pageHeight = 842;
         const margin = 20;
 
-        // QR code dimensions (smaller size)
-        const qrSize = 28; // Reduced from 35
+        // QR code dimensions
+        const qrSize = 35;
         const labelWidth = 110;
-        const labelHeight = 50;
+        const labelHeight = 60; // Increased to accommodate all elements
         const spacingX = 3;
-        const spacingY = 9; // Increased from 3 (more gap between rows)
+        const spacingY = 9;
 
         // Calculate grid layout
         const cols = Math.floor(
@@ -97,8 +97,6 @@ export class GuestPDFService {
             const base64Data = qrCodeDataUrl.split(',')[1];
             const qrImageBuffer = Buffer.from(base64Data, 'base64');
 
-            // No border - removed for cleaner look
-
             // ✅ QR code on the LEFT
             const qrX = labelX + 3;
             const qrY = labelY + 5;
@@ -108,43 +106,74 @@ export class GuestPDFService {
               height: qrSize,
             });
 
-            // --- [REMOVED] QR Text Code Block was here ---
+            // ✅ Check if this is a visitor or VVIP (not delegate)
+            const isVisitorOrVVIP = pass.category?.toLowerCase() === 'visitor' || 
+                                     pass.category?.toLowerCase() === 'vvip';
 
-            // ✅ Text on the RIGHT side
             const textX = qrX + qrSize + 8; // 8pt gap from QR
             let textY = labelY + 8;
             const textWidth = labelWidth - qrSize - 12;
 
-            // ✅ Display Name
-            const displayName = pass.name || `${pass.category} Guest`;
-
-            doc
-              .fontSize(7)
-              .font('Helvetica-Bold')
-              .text(displayName, textX, textY, {
-                width: textWidth,
-                align: 'left',
-                lineBreak: true,
-              });
-
-            // Calculate height of name text
-            const nameHeight = doc.heightOfString(displayName, {
-              width: textWidth,
-              lineBreak: true,
-            });
-
-            textY += nameHeight + 4; // 4pt gap between name and designation
-
-            // ✅ Display Designation (if available)
-            if (pass.designation) {
+            if (isVisitorOrVVIP) {
+              // ✅ NEW DESIGN for Visitors and VVIPs
+              
+              // "MPSO 2026" text
               doc
-                .fontSize(6)
-                .font('Helvetica')
-                .text(pass.designation, textX, textY, {
+                .fontSize(9)
+                .font('Helvetica-Bold')
+                .text('MPSO 2026', textX, textY, {
+                  width: textWidth,
+                  align: 'center',
+                });
+
+              textY += 30; // Increased gap between "MPSO 2026" and underline
+
+              // ✅ Only blank underline for manual writing
+              const lineY = textY;
+              const lineStartX = textX;
+              const lineEndX = textX + textWidth;
+
+              doc
+                .strokeColor('#000000')
+                .lineWidth(0.5)
+                .moveTo(lineStartX, lineY)
+                .lineTo(lineEndX, lineY)
+                .stroke();
+
+            } else {
+              // ✅ ORIGINAL DESIGN for Delegates (UNCHANGED)
+              
+              // Display Name
+              const displayName = pass.name || `${pass.category} Guest`;
+
+              doc
+                .fontSize(7)
+                .font('Helvetica-Bold')
+                .text(displayName, textX, textY, {
                   width: textWidth,
                   align: 'left',
                   lineBreak: true,
                 });
+
+              // Calculate height of name text
+              const nameHeight = doc.heightOfString(displayName, {
+                width: textWidth,
+                lineBreak: true,
+              });
+
+              textY += nameHeight + 4; // 4pt gap between name and designation
+
+              // Display Designation (if available)
+              if (pass.designation) {
+                doc
+                  .fontSize(6)
+                  .font('Helvetica')
+                  .text(pass.designation, textX, textY, {
+                    width: textWidth,
+                    align: 'left',
+                    lineBreak: true,
+                  });
+              }
             }
 
             currentLabel++;

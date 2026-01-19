@@ -31,7 +31,7 @@ export class FeedbackService {
     return this.questionRepository.save(question);
   }
 
-  async getAllQuestions(includeInactive = false): Promise<FeedbackQuestion[]> {
+  async getAllQuestions(includeInactive = false): Promise<any[]> {
     const query = this.questionRepository
       .createQueryBuilder('question')
       .orderBy('question.order', 'ASC')
@@ -41,7 +41,42 @@ export class FeedbackService {
       query.andWhere('question.isActive = :isActive', { isActive: true });
     }
 
-    return query.getMany();
+    const questions = await query.getMany();
+
+    // Get statistics for each question
+    const questionsWithStats = await Promise.all(
+      questions.map(async (question) => {
+        const responses = await this.responseRepository.find({
+          where: { questionId: question.id },
+        });
+
+        const totalResponses = responses.length;
+        const averageRating =
+          totalResponses > 0
+            ? (responses.reduce((sum, r) => sum + r.rating, 0) / totalResponses).toFixed(2)
+            : '0';
+
+        const ratings = [1, 2, 3, 4, 5].map((rating) => {
+          const count = responses.filter((r) => r.rating === rating).length;
+          return {
+            rating,
+            count,
+            percentage: totalResponses > 0 ? ((count / totalResponses) * 100).toFixed(1) : '0',
+          };
+        });
+
+        return {
+          ...question,
+          statistics: {
+            totalResponses,
+            averageRating,
+            ratings,
+          },
+        };
+      }),
+    );
+
+    return questionsWithStats;
   }
 
   async getQuestionById(id: string): Promise<FeedbackQuestion> {
@@ -89,6 +124,7 @@ export class FeedbackService {
 
   async submitFeedback(
     dto: SubmitFeedbackDto,
+    name: string,
     ipAddress?: string,
     userAgent?: string,
   ): Promise<FeedbackResponse> {
@@ -96,6 +132,7 @@ export class FeedbackService {
 
     const response = this.responseRepository.create({
       questionId: dto.questionId,
+      name,
       rating: dto.rating,
       comment: dto.comment,
       ipAddress,
@@ -113,7 +150,7 @@ export class FeedbackService {
     const responses: FeedbackResponse[] = [];
 
     for (const item of dto.responses) {
-      const response = await this.submitFeedback(item, ipAddress, userAgent);
+      const response = await this.submitFeedback(item, dto.name, ipAddress, userAgent);
       responses.push(response);
     }
 
@@ -132,6 +169,7 @@ export class FeedbackService {
 
     const responses = await this.responseRepository.find({
       where: { questionId },
+      order: { createdAt: 'DESC' },
     });
 
     const totalResponses = responses.length;
@@ -156,9 +194,9 @@ export class FeedbackService {
       ratings,
       recentComments: responses
         .filter((r) => r.comment)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .slice(0, 10)
         .map((r) => ({
+          name: r.name,
           rating: r.rating,
           comment: r.comment,
           createdAt: r.createdAt,
@@ -167,7 +205,11 @@ export class FeedbackService {
   }
 
   async getAllStatistics(): Promise<any> {
-    const questions = await this.getAllQuestions(false);
+    const questions = await this.questionRepository.find({
+      where: { isActive: true },
+      order: { order: 'ASC' },
+    });
+
     const statistics = await Promise.all(
       questions.map((q) => this.getQuestionStatistics(q.id)),
     );

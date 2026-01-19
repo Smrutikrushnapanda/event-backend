@@ -57,9 +57,12 @@ export class SubmitFeedbackDto {
 }
 
 export class BulkSubmitFeedbackDto {
+  @ApiProperty({ example: 'John Doe' })
+  @IsString()
+  name: string;
+
   @ApiProperty({ type: [SubmitFeedbackDto] })
   @IsArray()
-  @IsOptional() // Add this line
   @ValidateNested({ each: true })
   @Type(() => SubmitFeedbackDto)
   responses: SubmitFeedbackDto[];
