@@ -97,6 +97,17 @@ export class GuestPDFService {
             const base64Data = qrCodeDataUrl.split(',')[1];
             const qrImageBuffer = Buffer.from(base64Data, 'base64');
 
+            // ✅ Check if this is a visitor or VVIP (not delegate)
+            const isVisitorOrVVIP = pass.category?.toLowerCase() === 'visitor' || 
+                                     pass.category?.toLowerCase() === 'vvip';
+
+            // ✅ Add border for Visitors & VVIPs
+            if (isVisitorOrVVIP) {
+              doc
+                .rect(labelX, labelY, labelWidth, labelHeight)
+                .stroke('#000000');
+            }
+
             // ✅ QR code on the LEFT
             const qrX = labelX + 3;
             const qrY = labelY + 5;
@@ -106,40 +117,14 @@ export class GuestPDFService {
               height: qrSize,
             });
 
-            // ✅ Check if this is a visitor or VVIP (not delegate)
-            const isVisitorOrVVIP = pass.category?.toLowerCase() === 'visitor' || 
-                                     pass.category?.toLowerCase() === 'vvip';
-
             const textX = qrX + qrSize + 8; // 8pt gap from QR
             let textY = labelY + 8;
             const textWidth = labelWidth - qrSize - 12;
 
             if (isVisitorOrVVIP) {
               // ✅ NEW DESIGN for Visitors and VVIPs
+              // Just QR code with border and blank space (no text, no underline)
               
-              // "MPSO 2026" text
-              doc
-                .fontSize(9)
-                .font('Helvetica-Bold')
-                .text('MPSO 2026', textX, textY, {
-                  width: textWidth,
-                  align: 'center',
-                });
-
-              textY += 30; // Increased gap between "MPSO 2026" and underline
-
-              // ✅ Only blank underline for manual writing
-              const lineY = textY;
-              const lineStartX = textX;
-              const lineEndX = textX + textWidth;
-
-              doc
-                .strokeColor('#000000')
-                .lineWidth(0.5)
-                .moveTo(lineStartX, lineY)
-                .lineTo(lineEndX, lineY)
-                .stroke();
-
             } else {
               // ✅ ORIGINAL DESIGN for Delegates (UNCHANGED)
               
