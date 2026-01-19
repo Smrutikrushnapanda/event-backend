@@ -101,13 +101,6 @@ export class GuestPDFService {
             const isVisitorOrVVIP = pass.category?.toLowerCase() === 'visitor' || 
                                      pass.category?.toLowerCase() === 'vvip';
 
-            // ✅ Add border for Visitors & VVIPs
-            if (isVisitorOrVVIP) {
-              doc
-                .rect(labelX, labelY, labelWidth, labelHeight)
-                .stroke('#000000');
-            }
-
             // ✅ QR code on the LEFT
             const qrX = labelX + 3;
             const qrY = labelY + 5;
