@@ -324,7 +324,7 @@ async findAllForExport(
   const queryBuilder = this.registrationRepository
     .createQueryBuilder('registration')
     .leftJoinAndSelect('registration.checkIns', 'checkIns')
-	.orderBy('registration.createdAt', 'ASC')
+	  .orderBy('registration.createdAt', 'ASC')
     .addOrderBy('registration.district', 'ASC')
 
   if (district) {
