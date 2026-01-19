@@ -324,10 +324,8 @@ async findAllForExport(
   const queryBuilder = this.registrationRepository
     .createQueryBuilder('registration')
     .leftJoinAndSelect('registration.checkIns', 'checkIns')
-    .orderBy('registration.id', 'ASC')
+	.orderBy('registration.createdAt', 'ASC')
     .addOrderBy('registration.district', 'ASC')
-    .addOrderBy('registration.block', 'ASC')
-    .addOrderBy('registration.name', 'ASC');
 
   if (district) {
     queryBuilder.andWhere('registration.district = :district', { district });
