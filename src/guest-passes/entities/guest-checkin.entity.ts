@@ -10,10 +10,8 @@ import {
 import { GuestPass } from './guest-pass.entity';
 
 @Entity('guest_check_ins')
-@Index(['guestPassId', 'type'], { unique: true })
-@Index(['type'])
-@Index(['scannedAt'])
-@Index(['guestPassId'])
+@Index(['guestPassId', 'type', 'checkInDate'])
+@Index(['checkInDate'])
 export class GuestCheckIn {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -26,6 +24,24 @@ export class GuestCheckIn {
 
   @Column({ nullable: true, length: 50 })
   scannedBy: string;
+
+  // ✅ NEW: Which day is this check-in for?
+  @Column({ type: 'date' })
+  @Index()
+  checkInDate: Date;
+
+  // ✅ NEW: Edit tracking
+  @Column({ type: 'boolean', default: false })
+  wasEdited: boolean;
+
+  @Column({ type: 'varchar', nullable: true })
+  originalType?: 'entry' | 'lunch' | 'dinner' | 'session';
+
+  @Column({ nullable: true })
+  editedBy?: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  editedAt?: Date;
 
   @CreateDateColumn()
   scannedAt: Date;

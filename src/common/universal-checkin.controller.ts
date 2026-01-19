@@ -6,25 +6,16 @@ import {
   BadRequestException,
   NotFoundException,
   Logger,
+  Patch,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam, ApiBody } from '@nestjs/swagger';
-import { RegistrationsService } from '../registrations/registrations.service';
-import { GuestPassesService } from '../guest-passes/guest-passes.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Registration } from '../registrations/entities/registrations.entity';
 import { CheckIn } from '../registrations/entities/checkin.entity';
 import { GuestPass } from '../guest-passes/entities/guest-pass.entity';
 import { GuestCheckIn } from '../guest-passes/entities/guest-checkin.entity';
-
-interface CheckInDto {
-  type: 'entry' | 'lunch' | 'dinner' | 'session';
-  scannedBy: string;
-  wasBehalf?: boolean;
-  behalfName?: string;
-  behalfMobile?: string;
-  behalfGender?: 'male' | 'female' | 'others';
-}
+import { CheckInDto, EditCheckInDto } from './dto/checkin.dto';
 
 @ApiTags('Universal Check-in')
 @Controller('universal-checkin')
@@ -32,8 +23,6 @@ export class UniversalCheckinController {
   private readonly logger = new Logger(UniversalCheckinController.name);
 
   constructor(
-    private readonly registrationsService: RegistrationsService,
-    private readonly guestPassesService: GuestPassesService,
     @InjectRepository(Registration)
     private registrationRepository: Repository<Registration>,
     @InjectRepository(CheckIn)
@@ -44,401 +33,441 @@ export class UniversalCheckinController {
     private guestCheckInRepository: Repository<GuestCheckIn>,
   ) {}
 
-  // ✅ LOOKUP ONLY - Does NOT create check-in record
-  @Post(':qrCode/lookup')
-  @ApiOperation({ 
-    summary: 'Lookup attendee by QR code (NO check-in)',
-    description: 'Retrieves attendee information without creating a check-in record. Tries farmer first, then guest.'
-  })
-  @ApiParam({ name: 'qrCode', description: 'QR code to lookup' })
-  async universalLookup(@Param('qrCode') qrCode: string) {
-    this.logger.log(`🔍 Universal Lookup: ${qrCode}`);
-
-    try {
-      // ✅ DIRECT DATABASE QUERY - Bypass cache
-      this.logger.log(`🔍 Searching registrations table for: ${qrCode}`);
-      const farmer = await this.registrationRepository.findOne({
-        where: { qrCode: qrCode },
-        relations: ['checkIns'],
-      });
-      
-      if (farmer) {
-        this.logger.log(`✅ Found Farmer: ${farmer.name} (ID: ${farmer.id})`);
-        
-        return {
-          success: true,
-          message: 'Farmer found',
-          type: 'farmer',
-          attendeeType: 'FARMER',
-          data: {
-            id: farmer.id,
-            name: farmer.name,
-            mobile: farmer.mobile,
-            village: farmer.village,
-            block: farmer.block,
-            district: farmer.district,
-            category: farmer.category,
-            gender: farmer.gender,
-            caste: farmer.caste,
-            qrCode: farmer.qrCode,
-            behalfName: farmer.behalfName || null,
-            behalfMobile: farmer.behalfMobile || null,
-            behalfGender: farmer.behalfGender || null,
-            isBehalfAttending: farmer.isBehalfAttending || false,
-            hasCheckedIn: {
-              entry: farmer.hasEntryCheckIn || false,
-              lunch: farmer.hasLunchCheckIn || false,
-              dinner: farmer.hasDinnerCheckIn || false,
-              session: farmer.hasSessionCheckIn || false,
-            },
-          },
-        };
-      } else {
-        this.logger.log(`❌ Farmer not found for QR: ${qrCode}`);
-      }
-    } catch (farmerError) {
-      this.logger.error(`❌ Farmer lookup error:`, farmerError);
-    }
-
-    try {
-      // ✅ DIRECT DATABASE QUERY for guest
-      this.logger.log(`🔍 Searching guest_passes table for: ${qrCode}`);
-      const guest = await this.guestPassRepository.findOne({
-        where: { qrCode: qrCode },
-      });
-      
-      if (guest) {
-        this.logger.log(`✅ Found Guest: ${guest.name || 'Unassigned'} (ID: ${guest.id})`);
-        
-        return {
-          success: true,
-          message: guest.isAssigned ? 'Guest found' : 'Unassigned guest pass',
-          type: 'guest',
-          attendeeType: 'GUEST',
-          data: {
-            id: guest.id,
-            name: guest.name,
-            mobile: guest.mobile,
-            category: guest.category,
-            qrCode: guest.qrCode,
-            isAssigned: guest.isAssigned,
-            sequenceNumber: guest.sequenceNumber,
-            hasCheckedIn: {
-              entry: guest.hasEntryCheckIn || false,
-              lunch: guest.hasLunchCheckIn || false,
-              dinner: guest.hasDinnerCheckIn || false,
-              session: guest.hasSessionCheckIn || false,
-            },
-          },
-        };
-      } else {
-        this.logger.log(`❌ Guest not found for QR: ${qrCode}`);
-      }
-    } catch (guestError) {
-      this.logger.error(`❌ Guest lookup error:`, guestError);
-    }
-
-    // Neither found
-    this.logger.error(`❌ QR code not found in any table: ${qrCode}`);
-    throw new NotFoundException('QR code not found in system');
+  /**
+   * Get today's date in YYYY-MM-DD format
+   */
+  private getTodayDate(): string {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
   }
 
-  // ✅ CHECK-IN - Creates check-in record with behalf support
+  /**
+   * Get today's check-in status for a farmer
+   */
+  private async getFarmerTodayStatus(farmerId: string, today: string) {
+    const checkIns = await this.checkInRepository.find({
+      where: {
+        registrationId: farmerId,
+        checkInDate: today as any,
+      },
+    });
+
+    return {
+      hasEntry: checkIns.some(c => c.type === 'entry'),
+      hasLunch: checkIns.some(c => c.type === 'lunch'),
+      hasDinner: checkIns.some(c => c.type === 'dinner'),
+      hasSession: checkIns.some(c => c.type === 'session'),
+      checkIns,
+    };
+  }
+
+  /**
+   * Get today's check-in status for a guest
+   */
+  private async getGuestTodayStatus(guestId: string, today: string) {
+    const checkIns = await this.guestCheckInRepository.find({
+      where: {
+        guestPassId: guestId,
+        checkInDate: today as any,
+      },
+    });
+
+    return {
+      hasEntry: checkIns.some(c => c.type === 'entry'),
+      hasLunch: checkIns.some(c => c.type === 'lunch'),
+      hasDinner: checkIns.some(c => c.type === 'dinner'),
+      hasSession: checkIns.some(c => c.type === 'session'),
+      checkIns,
+    };
+  }
+
+  // ✅ LOOKUP ENDPOINT (Gets today's status)
+  @Post(':qrCode/lookup')
+  @ApiOperation({ 
+    summary: 'Lookup attendee by QR code',
+    description: 'Returns attendee info with TODAY\'s check-in status'
+  })
+  async universalLookup(@Param('qrCode') qrCode: string) {
+    this.logger.log(`🔍 Lookup: ${qrCode}`);
+    const today = this.getTodayDate();
+
+    // Try farmer first
+    const farmer = await this.registrationRepository.findOne({
+      where: { qrCode },
+    });
+    
+    if (farmer) {
+      const status = await this.getFarmerTodayStatus(farmer.id, today);
+      
+      return {
+        success: true,
+        message: 'Farmer found',
+        type: 'farmer',
+        attendeeType: 'FARMER',
+        data: {
+          id: farmer.id,
+          name: farmer.name,
+          mobile: farmer.mobile,
+          village: farmer.village,
+          block: farmer.block,
+          district: farmer.district,
+          category: farmer.category,
+          gender: farmer.gender,
+          qrCode: farmer.qrCode,
+          behalfName: farmer.behalfName,
+          behalfMobile: farmer.behalfMobile,
+          behalfGender: farmer.behalfGender,
+          isBehalfAttending: farmer.isBehalfAttending,
+          // ✅ TODAY'S STATUS
+          hasCheckedIn: {
+            entry: status.hasEntry,
+            lunch: status.hasLunch,
+            dinner: status.hasDinner,
+            session: status.hasSession,
+          },
+          todaysCheckIns: status.checkIns.map(c => ({
+            id: c.id,
+            type: c.type,
+            scannedAt: c.scannedAt,
+            scannedBy: c.scannedBy,
+            wasBehalf: c.wasBehalf,
+            wasEdited: c.wasEdited,
+            originalType: c.originalType,
+          })),
+        },
+      };
+    }
+
+    // Try guest
+    const guest = await this.guestPassRepository.findOne({
+      where: { qrCode },
+    });
+    
+    if (guest) {
+      const status = await this.getGuestTodayStatus(guest.id, today);
+      
+      return {
+        success: true,
+        message: guest.isAssigned ? 'Guest found' : 'Unassigned guest pass',
+        type: 'guest',
+        attendeeType: 'GUEST',
+        data: {
+          id: guest.id,
+          name: guest.name,
+          mobile: guest.mobile,
+          category: guest.category,
+          qrCode: guest.qrCode,
+          isAssigned: guest.isAssigned,
+          sequenceNumber: guest.sequenceNumber,
+          // ✅ TODAY'S STATUS
+          hasCheckedIn: {
+            entry: status.hasEntry,
+            lunch: status.hasLunch,
+            dinner: status.hasDinner,
+            session: status.hasSession,
+          },
+          todaysCheckIns: status.checkIns.map(c => ({
+            id: c.id,
+            type: c.type,
+            scannedAt: c.scannedAt,
+            scannedBy: c.scannedBy,
+            wasEdited: c.wasEdited,
+            originalType: c.originalType,
+          })),
+        },
+      };
+    }
+
+    throw new NotFoundException('QR code not found');
+  }
+
+  // ✅ CHECK-IN ENDPOINT (Creates check-in for TODAY)
   @Post(':qrCode')
   @ApiOperation({ 
     summary: 'Universal check-in',
-    description: 'Creates a check-in record for farmer or guest. Supports behalf person check-in for farmers.'
-  })
-  @ApiParam({ name: 'qrCode', description: 'QR code to check in' })
-  @ApiBody({
-    description: 'Check-in data',
-    schema: {
-      type: 'object',
-      properties: {
-        type: { 
-          type: 'string', 
-          enum: ['entry', 'lunch', 'dinner', 'session'],
-          description: 'Type of check-in'
-        },
-        scannedBy: { 
-          type: 'string',
-          description: 'ID of volunteer who scanned'
-        },
-        wasBehalf: {
-          type: 'boolean',
-          description: 'Whether this check-in is for a behalf person',
-          default: false
-        },
-        behalfName: {
-          type: 'string',
-          description: 'Name of behalf person (required if wasBehalf is true)',
-          default: false
-        },
-        behalfMobile: {
-          type: 'string',
-          description: 'Mobile of behalf person (required if wasBehalf is true)',
-          default: false
-        },
-        behalfGender: {
-          type: 'string',
-          enum: ['male', 'female', 'others'],
-          description: 'Gender of behalf person (required if wasBehalf is true)',
-          default: 'male'
-        }
-      },
-      required: ['type', 'scannedBy']
-    }
+    description: 'Creates check-in for TODAY. Allows daily repeats.'
   })
   async universalCheckIn(
     @Param('qrCode') qrCode: string,
     @Body() checkInDto: CheckInDto,
   ) {
-    this.logger.log(`📝 Universal Check-in: ${qrCode} - ${checkInDto.type}`);
+    this.logger.log(`📝 Check-in: ${qrCode} - ${checkInDto.type}`);
 
     if (!['entry', 'lunch', 'dinner', 'session'].includes(checkInDto.type)) {
-      throw new BadRequestException('Invalid check-in type. Must be: entry, lunch, dinner, or session');
+      throw new BadRequestException('Invalid check-in type');
     }
 
-    // ✅ Validate behalf data if wasBehalf is true
+    const today = this.getTodayDate();
+
+    // Validate behalf data
     if (checkInDto.wasBehalf) {
       if (!checkInDto.behalfName || !checkInDto.behalfMobile || !checkInDto.behalfGender) {
         throw new BadRequestException(
-          'behalfName, behalfMobile, and behalfGender are required when wasBehalf is true'
+          'behalfName, behalfMobile, and behalfGender required for behalf check-in'
         );
-      }
-      
-      if (!['male', 'female', 'others'].includes(checkInDto.behalfGender)) {
-        throw new BadRequestException('behalfGender must be: male, female, or others');
       }
     }
 
-    try {
-      // ✅ DIRECT DATABASE QUERY - Bypass cache
-      this.logger.log(`🔍 Searching for farmer with QR: ${qrCode}`);
-      const farmer = await this.registrationRepository.findOne({
-        where: { qrCode: qrCode },
-      });
-      
-      if (farmer) {
-        this.logger.log(`✅ Checking in Farmer: ${farmer.name} (ID: ${farmer.id})`);
-        
-        // Check if already checked in
-        const alreadyCheckedIn = 
-          (checkInDto.type === 'entry' && farmer.hasEntryCheckIn) ||
-          (checkInDto.type === 'lunch' && farmer.hasLunchCheckIn) ||
-          (checkInDto.type === 'dinner' && farmer.hasDinnerCheckIn) ||
-          (checkInDto.type === 'session' && farmer.hasSessionCheckIn);
+    // Try farmer first
+    const farmer = await this.registrationRepository.findOne({
+      where: { qrCode },
+    });
+    
+    if (farmer) {
+      const status = await this.getFarmerTodayStatus(farmer.id, today);
 
-        if (alreadyCheckedIn) {
-          return {
-            success: false,
-            message: `Already checked in for ${checkInDto.type}`,
-            type: 'farmer',
-            attendeeType: 'FARMER',
-            alreadyCheckedIn: true,
-            data: {
-              id: farmer.id,
-              name: farmer.name,
-              mobile: farmer.mobile,
-              village: farmer.village,
-              block: farmer.block,
-              district: farmer.district,
-              category: farmer.category,
-              qrCode: farmer.qrCode,
-              behalfName: farmer.behalfName || null,
-              behalfMobile: farmer.behalfMobile || null,
-              behalfGender: farmer.behalfGender || null,
-              isBehalfAttending: farmer.isBehalfAttending || false,
-              hasCheckedIn: {
-                entry: farmer.hasEntryCheckIn || false,
-                lunch: farmer.hasLunchCheckIn || false,
-                dinner: farmer.hasDinnerCheckIn || false,
-                session: farmer.hasSessionCheckIn || false,
-              },
-            },
-          };
-        }
+      // ✅ VALIDATION: Entry must be done first (TODAY)
+      if (checkInDto.type !== 'entry' && !status.hasEntry) {
+        throw new BadRequestException(
+          'Entry check-in must be completed first today'
+        );
+      }
 
-        // ✅ If wasBehalf is true, update farmer's behalf information
-        if (checkInDto.wasBehalf) {
-          farmer.behalfName = checkInDto.behalfName;
-          farmer.behalfMobile = checkInDto.behalfMobile;
-          farmer.behalfGender = checkInDto.behalfGender;
-          farmer.isBehalfAttending = true;
-          
-          this.logger.log(`✅ Updated behalf person: ${checkInDto.behalfName}`);
-        }
+      // ✅ Check if already checked in for this type TODAY
+      const alreadyCheckedIn =
+        (checkInDto.type === 'entry' && status.hasEntry) ||
+        (checkInDto.type === 'lunch' && status.hasLunch) ||
+        (checkInDto.type === 'dinner' && status.hasDinner) ||
+        (checkInDto.type === 'session' && status.hasSession);
 
-        // ✅ Create check-in record
-        const checkIn = this.checkInRepository.create({
-          type: checkInDto.type,
-          registrationId: farmer.id,
-          scannedBy: checkInDto.scannedBy,
-          wasBehalf: checkInDto.wasBehalf || false,
-          scannedAt: new Date(),
-        });
-
-        await this.checkInRepository.save(checkIn);
-        this.logger.log(`✅ CheckIn record created for farmer ${farmer.id}`);
-
-        // ✅ Update farmer check-in flags
-        if (checkInDto.type === 'entry') farmer.hasEntryCheckIn = true;
-        if (checkInDto.type === 'lunch') farmer.hasLunchCheckIn = true;
-        if (checkInDto.type === 'dinner') farmer.hasDinnerCheckIn = true;
-        if (checkInDto.type === 'session') farmer.hasSessionCheckIn = true;
-
-        await this.registrationRepository.save(farmer);
-        this.logger.log(`✅ Farmer flags updated`);
-
-        // Get updated farmer data
-        const updatedFarmer = await this.registrationRepository.findOne({
-          where: { qrCode: qrCode },
-        });
-
-        if (!updatedFarmer) {
-          throw new NotFoundException('Farmer not found after check-in');
-        }
-
+      if (alreadyCheckedIn) {
         return {
-          success: true,
-          message: `${checkInDto.type.toUpperCase()} check-in successful${checkInDto.wasBehalf ? ' (Behalf person)' : ''}`,
+          success: false,
+          message: `Already checked in for ${checkInDto.type} today`,
+          alreadyCheckedIn: true,
           type: 'farmer',
-          attendeeType: 'FARMER',
           data: {
-            id: updatedFarmer.id,
-            name: updatedFarmer.name,
-            mobile: updatedFarmer.mobile,
-            village: updatedFarmer.village,
-            block: updatedFarmer.block,
-            district: updatedFarmer.district,
-            category: updatedFarmer.category,
-            qrCode: updatedFarmer.qrCode,
-            behalfName: updatedFarmer.behalfName || null,
-            behalfMobile: updatedFarmer.behalfMobile || null,
-            behalfGender: updatedFarmer.behalfGender || null,
-            isBehalfAttending: updatedFarmer.isBehalfAttending || false,
+            id: farmer.id,
+            name: farmer.name,
+            qrCode: farmer.qrCode,
             hasCheckedIn: {
-              entry: updatedFarmer.hasEntryCheckIn || false,
-              lunch: updatedFarmer.hasLunchCheckIn || false,
-              dinner: updatedFarmer.hasDinnerCheckIn || false,
-              session: updatedFarmer.hasSessionCheckIn || false,
+              entry: status.hasEntry,
+              lunch: status.hasLunch,
+              dinner: status.hasDinner,
+              session: status.hasSession,
             },
           },
         };
-      } else {
-        this.logger.log(`❌ Farmer not found, trying guest...`);
       }
-    } catch (farmerError) {
-      this.logger.error(`❌ Farmer check-in error:`, farmerError);
-    }
 
-    try {
-      // ✅ DIRECT DATABASE QUERY for guest
-      this.logger.log(`🔍 Searching for guest with QR: ${qrCode}`);
-      const guest = await this.guestPassRepository.findOne({
-        where: { qrCode: qrCode },
+      // ✅ Update behalf info if provided
+      if (checkInDto.wasBehalf) {
+        farmer.behalfName = checkInDto.behalfName;
+        farmer.behalfMobile = checkInDto.behalfMobile;
+        farmer.behalfGender = checkInDto.behalfGender;
+        farmer.isBehalfAttending = true;
+        await this.registrationRepository.save(farmer);
+      }
+
+      // ✅ Create check-in for TODAY
+      const checkIn = this.checkInRepository.create({
+        type: checkInDto.type,
+        registrationId: farmer.id,
+        scannedBy: checkInDto.scannedBy,
+        wasBehalf: checkInDto.wasBehalf || false,
+        checkInDate: today as any,
+        scannedAt: new Date(),
       });
-      
-      if (guest) {
-        this.logger.log(`✅ Checking in Guest: ${guest.name || 'Unassigned'} (ID: ${guest.id})`);
-        
-        // ✅ Guests don't support behalf check-in
-        if (checkInDto.wasBehalf) {
-          throw new BadRequestException('Behalf check-in is not supported for guests');
-        }
-        
-        // Check if already checked in
-        const alreadyCheckedIn = 
-          (checkInDto.type === 'entry' && guest.hasEntryCheckIn) ||
-          (checkInDto.type === 'lunch' && guest.hasLunchCheckIn) ||
-          (checkInDto.type === 'dinner' && guest.hasDinnerCheckIn) ||
-          (checkInDto.type === 'session' && guest.hasSessionCheckIn);
 
-        if (alreadyCheckedIn) {
-          return {
-            success: false,
-            message: `Already checked in for ${checkInDto.type}`,
-            type: 'guest',
-            attendeeType: 'GUEST',
-            alreadyCheckedIn: true,
-            data: {
-              id: guest.id,
-              name: guest.name,
-              mobile: guest.mobile,
-              category: guest.category,
-              qrCode: guest.qrCode,
-              isAssigned: guest.isAssigned,
-              sequenceNumber: guest.sequenceNumber,
-              hasCheckedIn: {
-                entry: guest.hasEntryCheckIn || false,
-                lunch: guest.hasLunchCheckIn || false,
-                dinner: guest.hasDinnerCheckIn || false,
-                session: guest.hasSessionCheckIn || false,
-              },
-            },
-          };
-        }
+      await this.checkInRepository.save(checkIn);
 
-        // ✅ Create guest check-in record
-        const guestCheckIn = this.guestCheckInRepository.create({
-          type: checkInDto.type,
-          guestPassId: guest.id,
-          scannedBy: checkInDto.scannedBy,
-          scannedAt: new Date(),
-        });
+      // Get updated status
+      const updatedStatus = await this.getFarmerTodayStatus(farmer.id, today);
 
-        await this.guestCheckInRepository.save(guestCheckIn);
-        this.logger.log(`✅ GuestCheckIn record created for guest ${guest.id}`);
-
-        // ✅ Update guest flags
-        if (checkInDto.type === 'entry') guest.hasEntryCheckIn = true;
-        if (checkInDto.type === 'lunch') guest.hasLunchCheckIn = true;
-        if (checkInDto.type === 'dinner') guest.hasDinnerCheckIn = true;
-        if (checkInDto.type === 'session') guest.hasSessionCheckIn = true;
-
-        await this.guestPassRepository.save(guest);
-        this.logger.log(`✅ Guest flags updated`);
-
-        // Get updated guest data
-const updatedGuest = await this.guestPassRepository.findOne({
-  where: { qrCode: qrCode },
-});
-
-if (!updatedGuest) {
-  throw new NotFoundException('Guest not found after check-in');
-}
-
-return {
-  success: true,
-  message: `${checkInDto.type.toUpperCase()} check-in successful`,
-  type: 'guest',
-  attendeeType: 'GUEST',
-  data: {
-    id: updatedGuest.id,
-    name: updatedGuest.name,
-    mobile: updatedGuest.mobile,
-    category: updatedGuest.category,
-    qrCode: updatedGuest.qrCode,
-    isAssigned: updatedGuest.isAssigned,
-    sequenceNumber: updatedGuest.sequenceNumber,
-    hasCheckedIn: {
-      entry: updatedGuest.hasEntryCheckIn || false,
-      lunch: updatedGuest.hasLunchCheckIn || false,
-      dinner: updatedGuest.hasDinnerCheckIn || false,
-      session: updatedGuest.hasSessionCheckIn || false,
-    },
-  },
-};
-
-      } else {
-        this.logger.log(`❌ Guest not found either`);
-      }
-    } catch (guestError) {
-      this.logger.error(`❌ Guest check-in error:`, guestError);
+      return {
+        success: true,
+        message: `${checkInDto.type.toUpperCase()} check-in successful`,
+        type: 'farmer',
+        data: {
+          id: farmer.id,
+          name: farmer.name,
+          qrCode: farmer.qrCode,
+          checkInDate: today,
+          hasCheckedIn: {
+            entry: updatedStatus.hasEntry,
+            lunch: updatedStatus.hasLunch,
+            dinner: updatedStatus.hasDinner,
+            session: updatedStatus.hasSession,
+          },
+        },
+      };
     }
 
-    // Neither found
-    this.logger.error(`❌ QR code not found in system: ${qrCode}`);
-    throw new NotFoundException('QR code not found in system');
+    // Try guest
+    const guest = await this.guestPassRepository.findOne({
+      where: { qrCode },
+    });
+    
+    if (guest) {
+      if (checkInDto.wasBehalf) {
+        throw new BadRequestException('Behalf check-in not supported for guests');
+      }
+
+      const status = await this.getGuestTodayStatus(guest.id, today);
+
+      // Validate entry first
+      if (checkInDto.type !== 'entry' && !status.hasEntry) {
+        throw new BadRequestException(
+          'Entry check-in must be completed first today'
+        );
+      }
+
+      // Check if already checked in
+      const alreadyCheckedIn =
+        (checkInDto.type === 'entry' && status.hasEntry) ||
+        (checkInDto.type === 'lunch' && status.hasLunch) ||
+        (checkInDto.type === 'dinner' && status.hasDinner) ||
+        (checkInDto.type === 'session' && status.hasSession);
+
+      if (alreadyCheckedIn) {
+        return {
+          success: false,
+          message: `Already checked in for ${checkInDto.type} today`,
+          alreadyCheckedIn: true,
+          type: 'guest',
+          data: {
+            id: guest.id,
+            name: guest.name,
+            qrCode: guest.qrCode,
+            hasCheckedIn: {
+              entry: status.hasEntry,
+              lunch: status.hasLunch,
+              dinner: status.hasDinner,
+              session: status.hasSession,
+            },
+          },
+        };
+      }
+
+      // Create check-in
+      const guestCheckIn = this.guestCheckInRepository.create({
+        type: checkInDto.type,
+        guestPassId: guest.id,
+        scannedBy: checkInDto.scannedBy,
+        checkInDate: today as any,
+        scannedAt: new Date(),
+      });
+
+      await this.guestCheckInRepository.save(guestCheckIn);
+
+      const updatedStatus = await this.getGuestTodayStatus(guest.id, today);
+
+      return {
+        success: true,
+        message: `${checkInDto.type.toUpperCase()} check-in successful`,
+        type: 'guest',
+        data: {
+          id: guest.id,
+          name: guest.name,
+          qrCode: guest.qrCode,
+          checkInDate: today,
+          hasCheckedIn: {
+            entry: updatedStatus.hasEntry,
+            lunch: updatedStatus.hasLunch,
+            dinner: updatedStatus.hasDinner,
+            session: updatedStatus.hasSession,
+          },
+        },
+      };
+    }
+
+    throw new NotFoundException('QR code not found');
+  }
+
+  // ✅ EDIT CHECK-IN ENDPOINT
+  @Patch('check-in/:checkInId/edit')
+  @ApiOperation({ 
+    summary: 'Edit check-in type',
+    description: 'Allows changing lunch/dinner/session. Entry cannot be edited.'
+  })
+  async editCheckIn(
+    @Param('checkInId') checkInId: string,
+    @Body() editDto: EditCheckInDto,
+  ) {
+    this.logger.log(`✏️ Edit check-in: ${checkInId} -> ${editDto.newType}`);
+
+    // Try farmer check-in first
+    const farmerCheckIn = await this.checkInRepository.findOne({
+      where: { id: checkInId },
+    });
+
+    if (farmerCheckIn) {
+      // ❌ Cannot edit entry
+      if (farmerCheckIn.type === 'entry') {
+        throw new BadRequestException('Entry check-in cannot be edited');
+      }
+
+      // ❌ Cannot change TO entry
+      if (editDto.newType === 'entry' as any) {
+        throw new BadRequestException('Cannot change to entry type');
+      }
+
+      // Store original type if first edit
+      if (!farmerCheckIn.wasEdited) {
+        farmerCheckIn.originalType = farmerCheckIn.type;
+      }
+
+      // Update
+      farmerCheckIn.type = editDto.newType as any;
+      farmerCheckIn.wasEdited = true;
+      farmerCheckIn.editedBy = editDto.editedBy;
+      farmerCheckIn.editedAt = new Date();
+
+      await this.checkInRepository.save(farmerCheckIn);
+
+      return {
+        success: true,
+        message: `Check-in updated from ${farmerCheckIn.originalType || farmerCheckIn.type} to ${editDto.newType}`,
+        data: {
+          id: farmerCheckIn.id,
+          type: farmerCheckIn.type,
+          originalType: farmerCheckIn.originalType,
+          wasEdited: farmerCheckIn.wasEdited,
+          editedBy: farmerCheckIn.editedBy,
+          editedAt: farmerCheckIn.editedAt,
+        },
+      };
+    }
+
+    // Try guest check-in
+    const guestCheckIn = await this.guestCheckInRepository.findOne({
+      where: { id: checkInId },
+    });
+
+    if (guestCheckIn) {
+      if (guestCheckIn.type === 'entry') {
+        throw new BadRequestException('Entry check-in cannot be edited');
+      }
+
+      if (editDto.newType === 'entry' as any) {
+        throw new BadRequestException('Cannot change to entry type');
+      }
+
+      if (!guestCheckIn.wasEdited) {
+        guestCheckIn.originalType = guestCheckIn.type;
+      }
+
+      guestCheckIn.type = editDto.newType as any;
+      guestCheckIn.wasEdited = true;
+      guestCheckIn.editedBy = editDto.editedBy;
+      guestCheckIn.editedAt = new Date();
+
+      await this.guestCheckInRepository.save(guestCheckIn);
+
+      return {
+        success: true,
+        message: `Check-in updated from ${guestCheckIn.originalType || guestCheckIn.type} to ${editDto.newType}`,
+        data: {
+          id: guestCheckIn.id,
+          type: guestCheckIn.type,
+          originalType: guestCheckIn.originalType,
+          wasEdited: guestCheckIn.wasEdited,
+          editedBy: guestCheckIn.editedBy,
+          editedAt: guestCheckIn.editedAt,
+        },
+      };
+    }
+
+    throw new NotFoundException('Check-in not found');
   }
 }
