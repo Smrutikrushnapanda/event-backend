@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Between } from 'typeorm'; // ← Add Between
 import { Registration } from '../registrations/entities/registrations.entity';
 import { CheckIn } from '../registrations/entities/checkin.entity';
 import { GuestPass } from '../guest-passes/entities/guest-pass.entity';
@@ -34,23 +34,48 @@ export class UniversalCheckinController {
   ) {}
 
   /**
-   * Get today's date in YYYY-MM-DD format
+   * ✅ FIXED: Get today's date as Date object (midnight start)
    */
-  private getTodayDate(): string {
+  private getTodayDateStart(): Date {
     const today = new Date();
-    return today.toISOString().split('T')[0];
+    today.setHours(0, 0, 0, 0);
+    return today;
   }
 
   /**
-   * Get today's check-in status for a farmer
+   * ✅ FIXED: Get tomorrow's date (end of today)
    */
-  private async getFarmerTodayStatus(farmerId: string, today: string) {
+  private getTodayDateEnd(): Date {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    return tomorrow;
+  }
+
+  /**
+   * Get today's date string for display (YYYY-MM-DD)
+   */
+  private getTodayDateString(): string {
+    return new Date().toISOString().split('T')[0];
+  }
+
+  /**
+   * ✅ FIXED: Get today's check-in status for a farmer using date range
+   */
+  private async getFarmerTodayStatus(farmerId: string) {
+    const todayStart = this.getTodayDateStart();
+    const todayEnd = this.getTodayDateEnd();
+
+    this.logger.log(`Checking farmer ${farmerId} for date range: ${todayStart.toISOString()} - ${todayEnd.toISOString()}`);
+
     const checkIns = await this.checkInRepository.find({
       where: {
         registrationId: farmerId,
-        checkInDate: today as any,
+        checkInDate: Between(todayStart, todayEnd), // ✅ Proper date filtering
       },
     });
+
+    this.logger.log(`Found ${checkIns.length} check-ins for today`);
 
     return {
       hasEntry: checkIns.some(c => c.type === 'entry'),
@@ -62,13 +87,16 @@ export class UniversalCheckinController {
   }
 
   /**
-   * Get today's check-in status for a guest
+   * ✅ FIXED: Get today's check-in status for a guest using date range
    */
-  private async getGuestTodayStatus(guestId: string, today: string) {
+  private async getGuestTodayStatus(guestId: string) {
+    const todayStart = this.getTodayDateStart();
+    const todayEnd = this.getTodayDateEnd();
+
     const checkIns = await this.guestCheckInRepository.find({
       where: {
         guestPassId: guestId,
-        checkInDate: today as any,
+        checkInDate: Between(todayStart, todayEnd), // ✅ Proper date filtering
       },
     });
 
@@ -88,8 +116,7 @@ export class UniversalCheckinController {
     description: 'Returns attendee info with TODAY\'s check-in status'
   })
   async universalLookup(@Param('qrCode') qrCode: string) {
-    this.logger.log(`🔍 Lookup: ${qrCode}`);
-    const today = this.getTodayDate();
+    this.logger.log(`🔍 Lookup: ${qrCode} on ${this.getTodayDateString()}`);
 
     // Try farmer first
     const farmer = await this.registrationRepository.findOne({
@@ -97,7 +124,7 @@ export class UniversalCheckinController {
     });
     
     if (farmer) {
-      const status = await this.getFarmerTodayStatus(farmer.id, today);
+      const status = await this.getFarmerTodayStatus(farmer.id);
       
       return {
         success: true,
@@ -133,7 +160,9 @@ export class UniversalCheckinController {
             wasBehalf: c.wasBehalf,
             wasEdited: c.wasEdited,
             originalType: c.originalType,
+            checkInDate: c.checkInDate,
           })),
+          currentDate: this.getTodayDateString(), // ✅ For debugging
         },
       };
     }
@@ -144,7 +173,7 @@ export class UniversalCheckinController {
     });
     
     if (guest) {
-      const status = await this.getGuestTodayStatus(guest.id, today);
+      const status = await this.getGuestTodayStatus(guest.id);
       
       return {
         success: true,
@@ -173,7 +202,9 @@ export class UniversalCheckinController {
             scannedBy: c.scannedBy,
             wasEdited: c.wasEdited,
             originalType: c.originalType,
+            checkInDate: c.checkInDate,
           })),
+          currentDate: this.getTodayDateString(), // ✅ For debugging
         },
       };
     }
@@ -191,13 +222,13 @@ export class UniversalCheckinController {
     @Param('qrCode') qrCode: string,
     @Body() checkInDto: CheckInDto,
   ) {
-    this.logger.log(`📝 Check-in: ${qrCode} - ${checkInDto.type}`);
+    this.logger.log(`📝 Check-in: ${qrCode} - ${checkInDto.type} on ${this.getTodayDateString()}`);
 
     if (!['entry', 'lunch', 'dinner', 'session'].includes(checkInDto.type)) {
       throw new BadRequestException('Invalid check-in type');
     }
 
-    const today = this.getTodayDate();
+    const todayDate = this.getTodayDateStart(); // ✅ Actual Date object
 
     // Validate behalf data
     if (checkInDto.wasBehalf) {
@@ -214,7 +245,7 @@ export class UniversalCheckinController {
     });
     
     if (farmer) {
-      const status = await this.getFarmerTodayStatus(farmer.id, today);
+      const status = await this.getFarmerTodayStatus(farmer.id);
 
       // ✅ VALIDATION: Entry must be done first (TODAY)
       if (checkInDto.type !== 'entry' && !status.hasEntry) {
@@ -259,20 +290,20 @@ export class UniversalCheckinController {
         await this.registrationRepository.save(farmer);
       }
 
-      // ✅ Create check-in for TODAY
+      // ✅ Create check-in for TODAY with proper Date object
       const checkIn = this.checkInRepository.create({
         type: checkInDto.type,
         registrationId: farmer.id,
         scannedBy: checkInDto.scannedBy,
         wasBehalf: checkInDto.wasBehalf || false,
-        checkInDate: today as any,
+        checkInDate: todayDate, // ✅ Proper Date object
         scannedAt: new Date(),
       });
 
       await this.checkInRepository.save(checkIn);
 
       // Get updated status
-      const updatedStatus = await this.getFarmerTodayStatus(farmer.id, today);
+      const updatedStatus = await this.getFarmerTodayStatus(farmer.id);
 
       return {
         success: true,
@@ -282,7 +313,7 @@ export class UniversalCheckinController {
           id: farmer.id,
           name: farmer.name,
           qrCode: farmer.qrCode,
-          checkInDate: today,
+          checkInDate: this.getTodayDateString(),
           hasCheckedIn: {
             entry: updatedStatus.hasEntry,
             lunch: updatedStatus.hasLunch,
@@ -303,7 +334,7 @@ export class UniversalCheckinController {
         throw new BadRequestException('Behalf check-in not supported for guests');
       }
 
-      const status = await this.getGuestTodayStatus(guest.id, today);
+      const status = await this.getGuestTodayStatus(guest.id);
 
       // Validate entry first
       if (checkInDto.type !== 'entry' && !status.hasEntry) {
@@ -339,18 +370,18 @@ export class UniversalCheckinController {
         };
       }
 
-      // Create check-in
+      // Create check-in with proper Date object
       const guestCheckIn = this.guestCheckInRepository.create({
         type: checkInDto.type,
         guestPassId: guest.id,
         scannedBy: checkInDto.scannedBy,
-        checkInDate: today as any,
+        checkInDate: todayDate, // ✅ Proper Date object
         scannedAt: new Date(),
       });
 
       await this.guestCheckInRepository.save(guestCheckIn);
 
-      const updatedStatus = await this.getGuestTodayStatus(guest.id, today);
+      const updatedStatus = await this.getGuestTodayStatus(guest.id);
 
       return {
         success: true,
@@ -360,7 +391,7 @@ export class UniversalCheckinController {
           id: guest.id,
           name: guest.name,
           qrCode: guest.qrCode,
-          checkInDate: today,
+          checkInDate: this.getTodayDateString(),
           hasCheckedIn: {
             entry: updatedStatus.hasEntry,
             lunch: updatedStatus.hasLunch,
@@ -374,7 +405,7 @@ export class UniversalCheckinController {
     throw new NotFoundException('QR code not found');
   }
 
-  // ✅ EDIT CHECK-IN ENDPOINT
+  // ✅ EDIT CHECK-IN ENDPOINT (unchanged, but can be improved similarly)
   @Patch('check-in/:checkInId/edit')
   @ApiOperation({ 
     summary: 'Edit check-in type',
