@@ -215,4 +215,185 @@ export class ExcelExportService {
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
   }
+
+// The filter parameter is simplified to just have "date" instead of "fromDate" and "toDate"
+
+async generateAttendanceReport(
+  registrations: Registration[], 
+  filters?: {
+    date?: string;
+    district?: string;
+    block?: string;
+  }
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Attendance Report');
+
+  // Add title and filter info
+  worksheet.mergeCells('A1:I1');
+  const titleCell = worksheet.getCell('A1');
+  titleCell.value = 'Event Attendance Report';
+  titleCell.font = { size: 16, bold: true };
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  
+  // Add filter information
+  let filterRow = 2;
+  
+  // ✅ UPDATED: Show single date instead of date range
+  if (filters?.date) {
+    worksheet.mergeCells(`A${filterRow}:I${filterRow}`);
+    const dateFilterCell = worksheet.getCell(`A${filterRow}`);
+    dateFilterCell.value = `Date: ${filters.date}`;
+    dateFilterCell.font = { italic: true, size: 12 };
+    dateFilterCell.alignment = { horizontal: 'center' };
+    filterRow++;
+  }
+  
+  if (filters?.district || filters?.block) {
+    worksheet.mergeCells(`A${filterRow}:I${filterRow}`);
+    const locationCell = worksheet.getCell(`A${filterRow}`);
+    if (filters.block) {
+      locationCell.value = `Location: ${filters.block}, ${filters.district}`;
+    } else if (filters.district) {
+      locationCell.value = `District: ${filters.district}`;
+    }
+    locationCell.font = { italic: true };
+    locationCell.alignment = { horizontal: 'center' };
+    filterRow++;
+  }
+
+  // Add empty row
+  filterRow++;
+
+  // Define columns starting from filterRow
+  worksheet.getRow(filterRow).values = [
+    'Sl No',
+    'Name',
+    'District',
+    'Block',
+    'Category',
+    'Entry',
+    'Lunch',
+    'Dinner',
+    'Session'
+  ];
+
+  // Style header row
+  const headerRow = worksheet.getRow(filterRow);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF4472C4' },
+  };
+  headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+  headerRow.height = 25;
+
+  // Set column widths
+  worksheet.columns = [
+    { key: 'serial', width: 8 },
+    { key: 'name', width: 25 },
+    { key: 'district', width: 18 },
+    { key: 'block', width: 18 },
+    { key: 'category', width: 30 },
+    { key: 'entry', width: 10 },
+    { key: 'lunch', width: 10 },
+    { key: 'dinner', width: 10 },
+    { key: 'session', width: 10 },
+  ];
+
+  // Add data rows
+  registrations.forEach((reg, index) => {
+    const row = worksheet.addRow({
+      serial: index + 1,
+      name: reg.name,
+      district: reg.district,
+      block: reg.block,
+      category: reg.category,
+      entry: reg.hasEntryCheckIn ? '✓' : '✗',
+      lunch: reg.hasLunchCheckIn ? '✓' : '✗',
+      dinner: reg.hasDinnerCheckIn ? '✓' : '✗',
+      session: reg.hasSessionCheckIn ? '✓' : '✗',
+    });
+
+    // Style check-in cells
+    ['F', 'G', 'H', 'I'].forEach((col, idx) => {
+      const cell = row.getCell(col);
+      const checkInTypes = ['hasEntryCheckIn', 'hasLunchCheckIn', 'hasDinnerCheckIn', 'hasSessionCheckIn'];
+      const hasCheckIn = reg[checkInTypes[idx]];
+      
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.font = { 
+        bold: true, 
+        size: 12,
+        color: { argb: hasCheckIn ? 'FF22C55E' : 'FFEF4444' } // Green or Red
+      };
+    });
+
+    // Alternate row colors
+    if (index % 2 === 0) {
+      row.eachCell((cell, colNumber) => {
+        if (colNumber <= 5) {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF8F9FA' },
+          };
+        }
+      });
+    }
+  });
+
+  // Add summary statistics at the bottom
+  const summaryStartRow = worksheet.rowCount + 2;
+  
+  worksheet.mergeCells(`A${summaryStartRow}:E${summaryStartRow}`);
+  const summaryTitleCell = worksheet.getCell(`A${summaryStartRow}`);
+  summaryTitleCell.value = 'Summary Statistics';
+  summaryTitleCell.font = { bold: true, size: 12 };
+  summaryTitleCell.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FFE5E7EB' },
+  };
+
+  const entryCount = registrations.filter(r => r.hasEntryCheckIn).length;
+  const lunchCount = registrations.filter(r => r.hasLunchCheckIn).length;
+  const dinnerCount = registrations.filter(r => r.hasDinnerCheckIn).length;
+  const sessionCount = registrations.filter(r => r.hasSessionCheckIn).length;
+  const total = registrations.length;
+
+  const stats = [
+    ['Total Registrations:', total],
+    ['Entry Check-ins:', `${entryCount} (${total > 0 ? Math.round(entryCount/total*100) : 0}%)`],
+    ['Lunch Check-ins:', `${lunchCount} (${total > 0 ? Math.round(lunchCount/total*100) : 0}%)`],
+    ['Dinner Check-ins:', `${dinnerCount} (${total > 0 ? Math.round(dinnerCount/total*100) : 0}%)`],
+    ['Session Check-ins:', `${sessionCount} (${total > 0 ? Math.round(sessionCount/total*100) : 0}%)`],
+  ];
+
+  stats.forEach((stat, idx) => {
+    const row = worksheet.getRow(summaryStartRow + idx + 1);
+    row.getCell(1).value = stat[0];
+    row.getCell(2).value = stat[1];
+    row.getCell(1).font = { bold: true };
+    row.getCell(2).alignment = { horizontal: 'right' };
+  });
+
+  // Add borders to all cells
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber >= filterRow) {
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
+      });
+    }
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
 }

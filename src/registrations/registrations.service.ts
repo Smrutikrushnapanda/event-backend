@@ -564,4 +564,70 @@ async findAllForExport(
 
     return updated;
   }
+
+// ✅ FIXED: Replace the findAllForAttendanceExport method in registrations.service.ts
+
+
+async findAllForAttendanceExport(
+  date: string,
+  district?: string,
+  block?: string,
+): Promise<Registration[]> {
+  const queryBuilder = this.registrationRepository
+    .createQueryBuilder('registration')
+    .leftJoinAndSelect('registration.checkIns', 'checkIns')
+    .orderBy('registration.createdAt', 'ASC')
+    .addOrderBy('registration.district', 'ASC')
+    .addOrderBy('registration.block', 'ASC');
+
+  // Apply district filter
+  if (district) {
+    queryBuilder.andWhere('registration.district = :district', { district });
+  }
+
+  // Apply block filter
+  if (block) {
+    queryBuilder.andWhere('registration.block = :block', { block });
+  }
+
+  // ✅ Filter registrations that have at least one check-in on the specified date
+  queryBuilder.andWhere((qb) => {
+    const subQuery = qb
+      .subQuery()
+      .select('1')
+      .from('check_ins', 'ci')
+      .where('ci.registrationId = registration.id')
+      .andWhere('DATE(ci.scannedAt) = :date', { date });
+
+    return 'EXISTS ' + subQuery.getQuery();
+  });
+
+  queryBuilder.setParameter('date', date);
+
+  const result = await queryBuilder.getMany();
+
+  // ✅ Filter check-ins to only include those on the specified date
+  result.forEach(registration => {
+    registration.checkIns = registration.checkIns.filter(checkIn => {
+      const checkInDate = new Date(checkIn.scannedAt).toISOString().split('T')[0];
+      return checkInDate === date;
+    });
+
+    // ✅ Recompute check-in flags based on filtered check-ins for this date
+    registration.hasEntryCheckIn = registration.checkIns.some(ci => ci.type === 'entry');
+    registration.hasLunchCheckIn = registration.checkIns.some(ci => ci.type === 'lunch');
+    registration.hasDinnerCheckIn = registration.checkIns.some(ci => ci.type === 'dinner');
+    registration.hasSessionCheckIn = registration.checkIns.some(ci => ci.type === 'session');
+  });
+
+  console.log(`📦 findAllForAttendanceExport: Fetched ${result.length} registrations for ${date}`);
+  if (district) {
+    console.log(`   District: ${district}`);
+  }
+  if (block) {
+    console.log(`   Block: ${block}`);
+  }
+
+  return result;
+}
 }

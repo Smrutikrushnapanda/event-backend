@@ -670,4 +670,118 @@ async update(
     throw error;
   }
 }
+
+// ✅ UPDATED: Replace the exportAttendanceReport endpoint in registrations.controller.ts
+
+@Get('export/attendance')
+@ApiOperation({ summary: 'Export attendance report for a specific date' })
+@ApiQuery({ name: 'date', required: true, type: String, description: 'Date (YYYY-MM-DD)' })
+@ApiQuery({ name: 'district', required: false, type: String })
+@ApiQuery({ name: 'block', required: false, type: String })
+@ApiResponse({ status: 200, description: 'Attendance report Excel generated successfully' })
+async exportAttendanceReport(
+  @Query('date') date: string,
+  @Query('district') district: string,
+  @Query('block') block: string,
+  @Res() res: Response,
+) {
+  try {
+    // Validate date parameter
+    if (!date) {
+      throw new BadRequestException('Date parameter is required');
+    }
+
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      throw new BadRequestException('Invalid date format. Use YYYY-MM-DD');
+    }
+
+    console.log(`📊 Exporting attendance report for ${date}...`);
+    console.log(`   District: ${district || 'All'}`);
+    console.log(`   Block: ${block || 'All'}`);
+
+    // Fetch filtered registrations
+    const registrations = await this.registrationsService.findAllForAttendanceExport(
+      date,
+      district || undefined,
+      block || undefined,
+    );
+
+    if (registrations.length === 0) {
+      throw new NotFoundException('No registrations found for the specified date and filters');
+    }
+
+    console.log(`   Found ${registrations.length} registrations with check-ins on ${date}`);
+
+    // Generate Excel
+    const excelBuffer = await this.excelExportService.generateAttendanceReport(
+      registrations,
+      {
+        date,
+        district,
+        block,
+      }
+    );
+
+    // Generate filename
+    const locationPart = block 
+      ? `_${block}` 
+      : district 
+      ? `_${district}` 
+      : '';
+
+    const filename = `Attendance_Report_${date}${locationPart}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', excelBuffer.length.toString());
+
+    res.send(excelBuffer);
+    console.log('✅ Attendance report exported successfully');
+  } catch (error) {
+    console.error('❌ Attendance export error:', error);
+    if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      throw error;
+    }
+    res.status(500).json({ error: 'Failed to generate attendance report' });
+  }
+}
+
+@Get('export/attendance-preview')
+@ApiOperation({ summary: 'Preview attendance data for dashboard' })
+@ApiQuery({ name: 'date', required: true, type: String })
+@ApiQuery({ name: 'district', required: false, type: String })
+@ApiQuery({ name: 'block', required: false, type: String })
+@ApiResponse({ status: 200, description: 'Returns filtered attendance data' })
+async getAttendancePreview(
+  @Query('date') date: string,
+  @Query('district') district?: string,
+  @Query('block') block?: string,
+) {
+  try {
+    const registrations = await this.registrationsService.findAllForAttendanceExport(
+      date,
+      district || undefined,
+      block || undefined,
+    );
+
+    // Return data with date-specific check-in flags
+    return registrations.map(reg => ({
+      id: reg.id,
+      qrCode: reg.qrCode,
+      name: reg.name,
+      district: reg.district,
+      block: reg.block,
+      category: reg.category,
+      hasEntryCheckIn: reg.hasEntryCheckIn,
+      hasLunchCheckIn: reg.hasLunchCheckIn,
+      hasDinnerCheckIn: reg.hasDinnerCheckIn,
+      hasSessionCheckIn: reg.hasSessionCheckIn,
+    }));
+  } catch (error) {
+    throw new BadRequestException('Failed to fetch attendance preview');
+  }
+}
+
 }
