@@ -30,7 +30,6 @@ export class GuestCheckIn {
   // Stored as DATE type (YYYY-MM-DD) in PostgreSQL
   // This allows daily repeats - one check-in of each type per day
   @Column({ type: 'date' })
-  @Index()
   checkInDate: Date;
 
   // ✅ Edit tracking

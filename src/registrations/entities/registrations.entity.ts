@@ -13,7 +13,8 @@ export class Registration {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', unique: true })
+  // Existing rows in production lacked qrCode, so keep nullable to allow schema sync; creation path always sets it.
+  @Column({ type: 'varchar', unique: true, nullable: true })
   @Index()
   qrCode: string;
 
