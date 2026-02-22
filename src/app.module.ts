@@ -19,7 +19,7 @@ import { FeedbackModule } from './feedback/feedback.module';
         rejectUnauthorized: false,
       },
       autoLoadEntities: true,
-      synchronize: true,
+      synchronize: false,
       logging: true,
       
       extra: {
